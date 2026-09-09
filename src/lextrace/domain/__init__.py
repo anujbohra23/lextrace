@@ -1,0 +1,1 @@
+"""Future legal domain types."""
