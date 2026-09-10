@@ -5,8 +5,9 @@
 LexTrace is an early research project for authority-aware U.S. case law retrieval.
 Use the `src/lextrace/` package layout. Feature packages are `domain`, `ingestion`,
 `retrieval`, `ranking`, and `evaluation`; keep them mostly empty until their work
-is explicitly scoped. FastAPI code lives in `api/`. `config.py` holds static
-metadata, and `cli.py` provides a help-only entry point.
+is explicitly scoped. FastAPI code lives in `api/`. `config.py` reads ingestion credentials lazily, and `cli.py` exposes
+`lextrace ingest-case <cluster_id>`. CourtListener schemas live in ingestion;
+internal Case and Opinion models live in domain.
 
 Place tests in `tests/unit/`, `tests/integration/`, and `tests/api/`. Store small,
 redistributable examples in `tests/fixtures/`, experiment configurations in
@@ -41,7 +42,7 @@ checks before submitting changes.
 
 ## Commit & Pull Request Guidelines
 
-There is no existing commit history. Use short, imperative commit subjects, such
+Follow the scaffold commit convention: short, imperative commit subjects, such
 as `Add health endpoint contract test`. Keep changes focused. PR descriptions
 should explain purpose, behavior changes, and validation results, and link issues
 when applicable.
@@ -49,5 +50,6 @@ when applicable.
 ## Scope & Configuration
 
 Do not add persistence, model services, orchestration, or frontend infrastructure
-without an explicit task. Never commit credentials or local corpora. No runtime
-environment variables are required, and `.env` loading is not configured.
+without an explicit task. Never commit credentials or local corpora. Ingestion requires
+`COURTLISTENER_API_TOKEN`; `.env` loading is not configured. Mock external HTTP
+with HTTPX MockTransport in tests. Never include credentials in error messages.

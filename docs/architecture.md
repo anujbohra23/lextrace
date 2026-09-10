@@ -1,34 +1,43 @@
 # Architecture
 
-LexTrace starts as one Python package and one FastAPI application. Feature
-packages are placeholders, not implemented pipelines.
+LexTrace is one Python package with a health-only FastAPI application and a
+synchronous CLI ingestion flow. Persistence and retrieval remain deferred.
 
-## Module boundaries
+## Implemented ingestion flow
 
-- `domain`: future case, citation, court, authority, and provenance types.
-- `ingestion`: future source adapters, parsing, and normalization.
-- `retrieval`: future candidate retrieval and retrieval strategies.
-- `ranking`: future relevance reranking and legal authority scoring.
-- `evaluation`: future reusable dataset loading, metrics, and experiment runs.
-- `api`: HTTP entry points; the only route today is `GET /health`.
-- `config.py`: static application metadata, with no external configuration yet.
-- `cli.py`: help-only entry point for future research commands.
+`lextrace ingest-case <cluster_id>` validates a positive integer, lazily reads
+`COURTLISTENER_API_TOKEN`, fetches the cluster/docket/opinions, normalizes their
+validated response models, and prints a complete internal Case as indented JSON.
 
-Keep domain code independent of transport concerns. API and CLI entry points
-should call reusable feature code. Add cross-module interfaces only when a
-concrete use case needs them. Preserve document provenance when ingestion begins,
-and distinguish legal authority from semantic relevance when ranking begins.
+- `domain/case.py`: internal Case and Opinion validation and serialization.
+- `ingestion/courtlistener.py`: separate external schemas and HTTPX fetching.
+- `ingestion/normalize.py`: pure metadata and HTML/plain-text conversion.
+- `config.py`: static API base/timeout and ingestion-only credential loading.
+- `cli.py`: argument handling, orchestration, JSON output, and safe errors.
+
+A Case represents one decision cluster, with distinct Opinion records. Court IDs
+come from docket.court_id. Unknown opinion types remain trimmed source strings;
+missing types become `unknown`. No authority classification is inferred.
+
+Validate linked docket/opinion IDs and construct requests against the fixed API
+base. Validate the cluster's relative public path before joining it to the fixed
+CourtListener origin. Never send credentials to response-provided URLs. Requests
+are sequential with explicit timeouts, no redirects, and no retries.
+
+Prefer html_with_citations, removing tags and script/style content while retaining
+paragraph boundaries; fall back to plain_text. Missing opinion text fails the
+whole command. Errors omit response bodies, credentials, and exception details.
 
 ## Research and testing
 
-Version experiment configurations under `experiments/configs/`. Keep local
-datasets and generated outputs in ignored `data/` and `artifacts/` directories.
-Use small redistributable examples in `tests/fixtures/`. Unit tests cover isolated
-behavior, integration tests cover module interactions, and API tests cover HTTP
-contracts. The health route reports process health, not dependency readiness.
+Unit tests cover models, schemas, links, and normalization. CLI integration tests
+exercise HTTPX MockTransport; no external calls or real credentials are needed.
+The API health contract remains independent of ingestion credentials.
+
+Version experiment configurations in experiments/configs/. Keep local corpora in
+data/ and results in artifacts/, both ignored. Small synthetic responses live in
+tests/fixtures/. Ranking, retrieval, and evaluation packages remain placeholders.
 
 ## Deferred infrastructure
 
-Persistence, database migrations, orchestration, model integrations, and a
-frontend are intentionally deferred. Introduce infrastructure when an actual
-feature requires it, preserving a single deployable application where practical.
+No database, embeddings, vector store, LLM, RAG, agents, or frontend is included.

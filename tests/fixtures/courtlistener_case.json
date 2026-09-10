@@ -1,0 +1,32 @@
+{
+  "cluster": {
+    "id": 1,
+    "absolute_url": "/opinion/1/example/",
+    "case_name": " Example v. Test ",
+    "date_filed": "2024-01-02",
+    "docket": "https://www.courtlistener.com/api/rest/v4/dockets/2/",
+    "sub_opinions": [
+      "https://www.courtlistener.com/api/rest/v4/opinions/3/",
+      "/api/rest/v4/opinions/4/"
+    ]
+  },
+  "docket": {
+    "id": 2,
+    "court_id": "scotus",
+    "docket_number": " 23-1 "
+  },
+  "opinions": [
+    {
+      "id": 3,
+      "type": " 010combined ",
+      "html_with_citations": "<p>First &amp; <b>second</b>.</p><script>secret</script><style>hidden</style><p>Next paragraph.</p>",
+      "plain_text": "not preferred"
+    },
+    {
+      "id": 4,
+      "type": null,
+      "html_with_citations": "",
+      "plain_text": " Separate opinion. "
+    }
+  ]
+}
