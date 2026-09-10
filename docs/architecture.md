@@ -70,3 +70,17 @@ No source-record payloads or credentials are stored in manifests.
 
 All new ingestion tests use HTTPX MockTransport and injected timing functions.
 Local output tests use temporary directories; no external data is needed.
+
+## Milestone 3A: Citation-Recovery Benchmark
+
+`evaluation/benchmark.py` defines benchmark records separately from Case objects.
+`evaluation/benchmark_build.py` validates frozen citation mappings, reviewed query
+spans, positive coverage, temporal bounds, and audit/split requirements; it samples
+unjudged candidates by court/year using seeded hashes and publishes a reproducible
+bundle. `ingestion/benchmark_sources.py` parses frozen external metadata only.
+It performs no acquisition. Existing ingestion and text normalization are intact.
+
+Only candidates.jsonl is eligible for a future retrieval index. Full source cases,
+weak labels, excerpt removals, and audits are evaluation provenance, not retriever
+inputs. Reporter citations remain distinct from opinion-to-opinion relationships.
+See [the V1 protocol](benchmark-v1.md) for limitations and deferred metric definitions.

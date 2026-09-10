@@ -12,6 +12,8 @@ from pydantic import ValidationError
 
 from lextrace.config import ConfigurationError, courtlistener_token
 from lextrace.corpus import CorpusError, CorpusQuery
+from lextrace.evaluation.benchmark import BenchmarkError
+from lextrace.evaluation.benchmark_build import build_benchmark, validate_benchmark
 from lextrace.evaluation.corpus_quality import inspect_corpus
 from lextrace.ingestion.corpus import ingest_corpus
 from lextrace.ingestion.courtlistener import IngestionError, fetch_case
@@ -63,11 +65,36 @@ def main(
         "inspect-corpus", help="Inspect normalized corpus quality offline"
     )
     inspect.add_argument("path", type=Path)
+    benchmark = commands.add_parser(
+        "build-benchmark", help="Build a reviewed citation-recovery bundle offline"
+    )
+    benchmark.add_argument("--corpus", type=Path, required=True)
+    benchmark.add_argument("--inputs", type=Path, required=True)
+    benchmark.add_argument(
+        "--config", type=Path, default=Path("experiments/configs/benchmark_v1.json")
+    )
+    benchmark.add_argument("--output", type=Path, required=True)
+    validate = commands.add_parser(
+        "validate-benchmark", help="Verify a frozen citation-recovery bundle offline"
+    )
+    validate.add_argument("bundle", type=Path)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return
     try:
+        if args.command == "build-benchmark":
+            print(
+                json.dumps(
+                    build_benchmark(args.corpus, args.inputs, args.config, args.output),
+                    sort_keys=True,
+                    indent=2,
+                )
+            )
+            return
+        if args.command == "validate-benchmark":
+            print(json.dumps(validate_benchmark(args.bundle), sort_keys=True, indent=2))
+            return
         if args.command == "inspect-corpus":
             print(json.dumps(inspect_corpus(args.path), sort_keys=True, indent=2))
             return
@@ -108,7 +135,7 @@ def main(
             return
         token = courtlistener_token()
         case = normalize_case(*fetch_case(args.cluster_id, token, transport=transport))
-    except (IngestionError, ConfigurationError, CorpusError) as error:
+    except (IngestionError, ConfigurationError, CorpusError, BenchmarkError) as error:
         parser.exit(1, f"Error: {error}\n")
     except KeyboardInterrupt:
         parser.exit(130, "Interrupted; completed corpus records are preserved.\n")

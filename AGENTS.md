@@ -57,3 +57,11 @@ Do not add persistence, model services, orchestration, or frontend infrastructur
 without an explicit task. Never commit credentials or local corpora. Ingestion requires
 `COURTLISTENER_API_TOKEN`; `.env` loading is not configured. Mock external HTTP
 with HTTPX MockTransport in tests. Never include credentials in error messages.
+
+## Benchmark Conventions
+
+V1 is a Citation-Recovery Benchmark, not comprehensive relevance ground truth.
+Keep its fixed temporal bounds, reviewed query provenance, and complete positive
+union intact. Call other candidates unjudged. Benchmark commands are offline;
+do not acquire data or add retrieval methods without an explicit task. Keep
+source opinion text unchanged and generated artifacts under data/benchmarks/v1/.

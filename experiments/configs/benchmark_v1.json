@@ -1,0 +1,27 @@
+{
+  "benchmark_id": "citation-recovery-v1",
+  "candidate_courts": [
+    "ca2",
+    "scotus"
+  ],
+  "candidate_cutoff": "2009-12-31",
+  "candidate_max": 500,
+  "candidate_min": 200,
+  "candidate_target": 300,
+  "detailed_audit_queries": 15,
+  "dev_count": 10,
+  "distractor_sampling": "court-year-sha256-round-robin-v1",
+  "excerpt_max_words": 300,
+  "excerpt_min_words": 150,
+  "format_version": 1,
+  "generation_rules": "citation-recovery-v1.0",
+  "minimum_positives": 2,
+  "normalizer_version": "milestone-1",
+  "query_count": 25,
+  "query_court": "ca2",
+  "query_date_end": "2010-12-31",
+  "query_date_start": "2010-01-01",
+  "selection_seed": 1729,
+  "task": "Citation-Recovery Benchmark",
+  "test_count": 15
+}
