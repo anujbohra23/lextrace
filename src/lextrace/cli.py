@@ -1,11 +1,19 @@
 """LexTrace command-line entry point."""
 
 import argparse
+import json
+import math
 from collections.abc import Sequence
+from datetime import date
+from pathlib import Path
 
 import httpx
+from pydantic import ValidationError
 
 from lextrace.config import ConfigurationError, courtlistener_token
+from lextrace.corpus import CorpusError, CorpusQuery
+from lextrace.evaluation.corpus_quality import inspect_corpus
+from lextrace.ingestion.corpus import ingest_corpus
 from lextrace.ingestion.courtlistener import IngestionError, fetch_case
 from lextrace.ingestion.normalize import normalize_case
 
@@ -16,6 +24,20 @@ def _cluster_id(value: str) -> int:
     return int(value)
 
 
+def _interval(value: str) -> float:
+    try:
+        interval = float(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            "request interval must be a positive number"
+        ) from None
+    if not math.isfinite(interval) or interval <= 0:
+        raise argparse.ArgumentTypeError(
+            "request interval must be a finite positive number"
+        )
+    return interval
+
+
 def main(
     argv: Sequence[str] | None = None, *, transport: httpx.BaseTransport | None = None
 ) -> None:
@@ -24,13 +46,70 @@ def main(
     commands = parser.add_subparsers(dest="command")
     ingest = commands.add_parser("ingest-case", help="Ingest a CourtListener cluster")
     ingest.add_argument("cluster_id", type=_cluster_id)
+    corpus = commands.add_parser("ingest-corpus", help="Build a bounded local corpus")
+    corpus.add_argument("--court", required=True)
+    corpus.add_argument("--filed-after", type=date.fromisoformat)
+    corpus.add_argument("--filed-before", type=date.fromisoformat)
+    corpus.add_argument("--max-cases", type=_cluster_id, required=True)
+    corpus.add_argument("--output", type=Path, required=True)
+    corpus.add_argument(
+        "--request-interval",
+        type=_interval,
+        required=True,
+        help="Minimum seconds between requests; choose for your account limits",
+    )
+    corpus.add_argument("--resume", action="store_true")
+    inspect = commands.add_parser(
+        "inspect-corpus", help="Inspect normalized corpus quality offline"
+    )
+    inspect.add_argument("path", type=Path)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return
     try:
+        if args.command == "inspect-corpus":
+            print(json.dumps(inspect_corpus(args.path), sort_keys=True, indent=2))
+            return
+        if args.command == "ingest-corpus":
+            try:
+                query = CorpusQuery(
+                    court=args.court,
+                    filed_after=args.filed_after,
+                    filed_before=args.filed_before,
+                    max_cases=args.max_cases,
+                )
+            except ValidationError:
+                parser.error("Invalid corpus filters.")
+            if (
+                query.filed_after
+                and query.filed_before
+                and query.filed_after > query.filed_before
+            ):
+                parser.error("Filed-date range is reversed.")
+            manifest = ingest_corpus(
+                query,
+                args.output,
+                courtlistener_token(),
+                request_interval=args.request_interval,
+                resume=args.resume,
+                transport=transport,
+            )
+            print(
+                json.dumps(
+                    {
+                        "status": manifest.runs[-1].status,
+                        "ingestion_quality": manifest.runs[-1].quality(),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+            return
         token = courtlistener_token()
         case = normalize_case(*fetch_case(args.cluster_id, token, transport=transport))
-    except (IngestionError, ConfigurationError) as error:
+    except (IngestionError, ConfigurationError, CorpusError) as error:
         parser.exit(1, f"Error: {error}\n")
+    except KeyboardInterrupt:
+        parser.exit(130, "Interrupted; completed corpus records are preserved.\n")
     print(case.model_dump_json(indent=2))

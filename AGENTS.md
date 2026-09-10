@@ -6,13 +6,17 @@ LexTrace is an early research project for authority-aware U.S. case law retrieva
 Use the `src/lextrace/` package layout. Feature packages are `domain`, `ingestion`,
 `retrieval`, `ranking`, and `evaluation`; keep them mostly empty until their work
 is explicitly scoped. FastAPI code lives in `api/`. `config.py` reads ingestion credentials lazily, and `cli.py` exposes
-`lextrace ingest-case <cluster_id>`. CourtListener schemas live in ingestion;
+`lextrace ingest-case <cluster_id>`, `ingest-corpus`, and `inspect-corpus`.
+CourtListener schemas live in ingestion;
 internal Case and Opinion models live in domain.
 
 Place tests in `tests/unit/`, `tests/integration/`, and `tests/api/`. Store small,
 redistributable examples in `tests/fixtures/`, experiment configurations in
 `experiments/configs/`, and architecture decisions in `docs/architecture.md`.
-Local corpora in `data/` and generated outputs in `artifacts/` are ignored.
+Local corpora and run manifests in `data/` and outputs in `artifacts/` are ignored.
+Keep reporter citation metadata separate from future cited-case edges. Preserve
+source-text defects; do not add correction heuristics. Batch records must validate
+as Case objects; safe rejection reasons belong only in run metadata.
 
 ## Build, Test, and Development Commands
 

@@ -1,7 +1,7 @@
 # Architecture
 
 LexTrace is one Python package with a health-only FastAPI application and a
-synchronous CLI ingestion flow. Persistence and retrieval remain deferred.
+synchronous CLI ingestion flows. Database persistence and retrieval remain deferred.
 
 ## Implemented ingestion flow
 
@@ -41,3 +41,32 @@ tests/fixtures/. Ranking, retrieval, and evaluation packages remain placeholders
 ## Deferred infrastructure
 
 No database, embeddings, vector store, LLM, RAG, agents, or frontend is included.
+
+## Milestone 2: local corpora
+
+`ingestion/corpus.py` coordinates a bounded sequential run. The CourtListener
+client lists clusters in ascending ID order, validates each record independently,
+and fetches docket/opinion details through one paced client. Pagination links are
+validated and only the cursor is copied into a fixed-origin request with the
+original filters. Request failures stop; invalid source records are rejected and
+recorded using fixed reason codes. Single-case ingestion retains its no-retry
+contract and existing text normalization.
+
+`domain/case.py` adds optional reporter_citations to the existing Case. The
+CourtListener cluster's structured reporter metadata is formatted as strings;
+unknown metadata stays null. There is no second normalized case representation.
+
+`corpus.py` owns canonical JSONL, atomic file replacement, and a versioned
+manifest with per-run counters/rejection metadata. Each saved corpus contains
+only valid unique cases. Resume validates query compatibility, reads saved IDs,
+then replays pagination. Completed records are never refreshed implicitly.
+The corpus and manifest are individually atomic, not one transaction; interrupted
+success counts are reconciled against saved records on resume. Single writer only.
+
+`evaluation/corpus_quality.py` reads validated JSONL offline and computes corpus
+metrics. Ingestion-quality metrics belong in manifest runs and do not alter the
+meaning of corpus completeness. Invalid JSONL produces a safe line-number error.
+No source-record payloads or credentials are stored in manifests.
+
+All new ingestion tests use HTTPX MockTransport and injected timing functions.
+Local output tests use temporary directories; no external data is needed.

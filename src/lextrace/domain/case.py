@@ -29,4 +29,5 @@ class Case(BaseModel):
     date_filed: date | None
     court_id: NonEmpty
     docket_number: NonEmpty | None
+    reporter_citations: list[NonEmpty] | None = None
     opinions: Annotated[list[Opinion], Field(min_length=1)]

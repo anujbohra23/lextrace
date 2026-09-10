@@ -71,3 +71,22 @@ def test_unsafe_link_never_requested() -> None:
         fetch_case(1, "fake-token", transport=httpx.MockTransport(handler))
     assert len(requests) == 1
     assert requests[0].url.host == "www.courtlistener.com"
+
+
+@pytest.mark.parametrize(
+    ("header", "expected"),
+    [
+        ("120", "120 seconds"),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", "2015-10-21T07:28:00+00:00"),
+        ("synthetic-secret", "try again later."),
+        ("-1", "try again later."),
+    ],
+)
+def test_safe_retry_after(header: str, expected: str) -> None:
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(429, headers={"Retry-After": header})
+    )
+    with pytest.raises(IngestionError) as error:
+        fetch_case(1, "synthetic-secret", transport=transport)
+    assert expected in str(error.value)
+    assert "synthetic-secret" not in str(error.value)

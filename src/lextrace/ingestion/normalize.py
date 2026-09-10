@@ -154,6 +154,18 @@ def normalize_case(
             date_filed=cluster.date_filed,
             court_id=docket.court_id,
             docket_number=(docket.docket_number or "").strip() or None,
+            reporter_citations=(
+                [
+                    " ".join(
+                        part
+                        for part in (citation.volume, citation.reporter, citation.page)
+                        if part
+                    )
+                    for citation in cluster.citations
+                ]
+                if cluster.citations is not None
+                else None
+            ),
             opinions=normalized,
         )
     except ValidationError:

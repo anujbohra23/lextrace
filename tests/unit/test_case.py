@@ -40,3 +40,25 @@ def test_case_rejects_empty_opinions() -> None:
                 "opinions": [],
             }
         )
+
+
+def test_old_cases_allow_unknown_reporter_citations() -> None:
+    case = Case.model_validate(
+        {
+            "source_id": "1",
+            "source_url": "https://www.courtlistener.com/opinion/1/a/",
+            "name": "A",
+            "date_filed": None,
+            "court_id": "ca2",
+            "docket_number": None,
+            "opinions": [
+                {
+                    "source_id": "2",
+                    "kind": "unknown",
+                    "text": "Text",
+                    "text_source_field": "plain_text",
+                }
+            ],
+        }
+    )
+    assert case.reporter_citations is None
