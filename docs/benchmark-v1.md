@@ -11,8 +11,8 @@ Uncited candidates are **unjudged candidates**, not proven negatives.
 V1 targets 25 Second Circuit queries filed during 2010 and a shared pool of
 200–500 candidate cases, targeting 300. Candidates come from the Second Circuit
 and U.S. Supreme Court, filed on or before 2009-12-31. Every query needs at least
-two eligible citation-derived positives. No retriever or metrics are implemented
-in Milestone 3A.
+two eligible citation-derived positives. A local BM25 evaluator is implemented;
+the live V1 bundle is not complete (see the acquisition report below).
 
 ## Conservative temporal universe
 
@@ -27,7 +27,8 @@ excluded with a recorded reason.
 ## Inputs and citation evidence
 
 The builder is offline. Supply a frozen Case JSONL containing query cases and an
-eligible candidate sampling frame, plus a reviewed BenchmarkInputs JSON file.
+eligible candidate sampling frame, plus a BenchmarkInputs JSON file marked
+reviewed or review_required.
 Underlying Case and Opinion models and their text normalization are unchanged.
 No full Case objects appear inside BenchmarkItem records.
 
@@ -56,8 +57,8 @@ metadata (`cluster`, `opinions_cited`) or `opinions-cited` pages. It makes no HT
 requests. A page with `next` is incomplete; acquisition must collect every page
 before asserting `complete: true`. Payload hashes identify source responses;
 the builder records them but cannot authenticate an upstream response from a hash
-alone. Preserve raw responses in the eventual acquisition archive. No acquisition
-command is introduced in this milestone.
+alone. Acquisition preserves raw successful JSON responses in a local hash-checked
+cache. Citation evidence records ordered page hashes and per-opinion depths.
 
 ## Human-selected queries and mechanical scrubbing
 
@@ -78,7 +79,8 @@ all mapped cited decisions, including excluded targets. It also screens obvious
 short forms (`Id.`, `Ibid.`, `supra`, `infra`), `v.` case references, and common
 federal reporter patterns. These checks are intentionally incomplete: aliases,
 OCR errors, quotations, and paraphrases can leak identity. All 25 queries require
-named human leakage approval and confirmation that known aliases were reviewed.
+named human leakage approval and confirmation that known aliases were reviewed
+before the bundle can have reviewed status.
 Mechanical success is not a guarantee of zero leakage.
 
 ## Candidate sampling
@@ -105,7 +107,8 @@ boundary, fail and revise query selections before freezing; do not silently
 change counts, dates, or move cases after viewing results. Group identification
 requires human review and is not inferred solely from docket numbers.
 
-All 25 queries need leakage review. Exactly 15 additionally require detailed
+For a reviewed bundle, all 25 queries need leakage review. Exactly 15 additionally
+require detailed
 positive-context audits covering every eligible positive once. Each audit records
 a reviewer, source citation-context offsets, a note, and one category:
 
@@ -145,6 +148,7 @@ The bundle contains:
 - `queries.jsonl`: typed BenchmarkItem records; no full Cases.
 - `provenance.json`: reviewed selections, offsets/removals, audits, mappings, and edges.
 - `config.json`: exact construction configuration.
+- `audit.json`: every query excerpt, positives, depth, exclusions, and review status.
 - `manifest.json`: frozen IDs, file hashes, generation-code content hash, versions,
   exclusions/counts, strata, audit IDs, and split assignments.
 
@@ -155,21 +159,57 @@ frozen inputs and compares bytes. A code change requires the matching code versi
 to reproduce an old bundle. Hashes detect changes, not fraudulent annotations.
 Never index `sources.jsonl` or pass positive IDs/provenance to a retriever.
 
-## Acquisition plan and live assumptions
+## Acquisition and review-ready workflow
 
-Prefer a small REST extension for the eventual acquisition stage. Reuse local
-Cases, deduplicate cited opinion IDs, cache opinion-to-cluster mappings, request
-only needed metadata, and download candidate text after selecting frozen IDs.
-Use existing conservative pacing and 429 stop behavior. No retries or bulk import
-are added here. Bulk snapshots and a bulk citations map can be considered for a
-later larger version; importing all opinion text is disproportionate for V1.
+`acquire-benchmark` uses nonsemantic Search `type=o`, `court`, `filed_after`,
+`filed_before`, `stat_Published=on`, and `order_by=dateFiled asc`. Cached pages
+freeze the discovery frame; IDs are sorted by date then numeric ID. REST detail
+requests select fields explicitly. Search timeout/server errors permit a narrow
+one-day REST fallback; authentication, quota, schema, and network failures stop.
+The fallback has unit coverage but has not been needed in a successful live run.
+The server-side cause of the earlier broad cluster-list timeout is unknown.
 
-Before acquiring data, validate the live shape and completeness of `opinions_cited`,
-`cluster`, citation-page `depth`/`next`, and lead/combined type codes. Verify that
-2010 ca2 queries yield enough resolvable pre-2010 ca2/scotus targets under the
-200–500 limit. Metadata availability, quota costs, and related-litigation coverage
-remain empirical questions. Do not claim real benchmark completion from synthetic
-tests or fabricate human approvals.
+All requests reconstruct trusted API paths, disable redirects, use a configurable
+90-second acquisition timeout, and run sequentially with a configurable interval
+(default 15 seconds). There are no retries. Quota is checked first when available;
+429 reports a safely parsed Retry-After and stops. A per-invocation request ceiling
+bounds cost. One writer per cache/output; do not refresh a frozen cache implicitly.
+Successful resources have SHA-256 sidecars; corrupted cache files fail closed.
+Resume retains completed source/provenance files and reuses valid cached responses.
+Request journals are local operational metadata, not immutable server snapshots.
+
+The first 25 eligible, distinct-name query cases with usable excerpt proposals
+are selected in filing-date/ID order. Exact-name deduplication is conservative,
+but does not identify every related proceeding; human litigation review remains
+required. Invalid source records have safe rejection entries. Request failures
+leave incomplete work explicitly incomplete. Do not interpret pending mappings
+as exclusions, empty citation lists, or negatives.
+
+Generation rules v1.1 declare a bounded distractor discovery frame **before any
+retrieval experiment**: up to the first 60 published clusters per court/year,
+2000–2009, sorted by date/ID from cached Search pages. Fixed-seed hash ordering
+and court/year round-robin select text fetches. This frame controls REST cost;
+it is not a random sample of all historical decisions and can overrepresent early
+dates within a year. All eligible positives remain eligible regardless of this
+frame's lower date bound. The builder includes their complete union and never
+truncates it. Target counts, minimum positives, and the common cutoff are unchanged.
+
+Automated excerpt proposals take the first passing window of up to 260 source
+words at paragraph starts in the first half of the opinion. Known cited names,
+reporter strings, and detectable reporter/short-form references are removed as
+recorded spans. The 150–300 word and existing leakage checks still apply. No prose
+is invented. All such selections have `review_status: review_required`, no human
+reviewer, and no claimed audit. This is a proposal heuristic, not a coherence or
+legal relevance judgment. Human review may choose different source spans.
+
+A full provisional bundle may be built and evaluated, but its test and overall
+numbers are **PROVISIONAL**. Promotion to reviewed requires the existing 25
+leakage approvals and 15 complete context audits; changing a status string alone
+cannot bypass those checks. Neither an incomplete pilot nor synthetic fixtures
+constitute a real benchmark.
+
+See [the BM25 implementation and live acquisition report](retrieval-baseline.md)
+for commands, actual results, costs, and the remaining external blocker.
 
 ## Milestone 3B metric contract and limitations
 
@@ -179,13 +219,14 @@ Recall@10, and Recall@20 divide unique recovered positives by all eligible posit
 for that query. MRR uses the first positive rank. NDCG@10 uses binary discounted
 gains and the ideal ranking for that query's positive count. Macro-average over
 queries; validate ranked IDs and reject duplicate results. No training split is
-needed. Tune only on dev; keep test frozen. Metrics are not implemented yet.
+needed. Tune only on dev; keep test frozen. The implementation rejects duplicate
+ranked IDs and reports dev/test/overall macro metrics.
 
 The small court/date scope, sampled universe, citation-extraction errors, manual
 excerpt selection, combined-opinion ambiguity, shared positives, and false
 unjudged negatives limit generalization. Post-decision excerpts can still reveal
 retrospective reasoning. Report these limits and do not treat scores as measures
 of comprehensive legal relevance, binding authority, or legal research quality.
-Milestone 3B may add a baseline retriever and evaluation metrics. Dense retrieval,
+The local BM25 baseline implements this metric contract. Dense retrieval,
 rerankers, graph/database infrastructure, LLM queries/labels, authority ranking,
 frontends, and topical hard-negative mining remain separately deferred.

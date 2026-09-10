@@ -1,5 +1,6 @@
 """Offline construction and verification of frozen citation-recovery bundles."""
 
+import json
 import re
 import tempfile
 from collections import Counter, defaultdict
@@ -118,6 +119,10 @@ def _code_digest() -> str:
     files = [
         "evaluation/benchmark.py",
         "evaluation/benchmark_build.py",
+        "evaluation/excerpts.py",
+        "ingestion/benchmark_sources.py",
+        "ingestion/benchmark_acquisition.py",
+        "ingestion/benchmark_job.py",
         "domain/case.py",
         "corpus.py",
         "ingestion/normalize.py",
@@ -322,7 +327,8 @@ def assemble(
                 query_provenance_id=selection.query_id,
             )
         )
-    if len(audited) != config.detailed_audit_queries:
+    reviewed = all(s.review_status == "reviewed" for s in inputs.selections)
+    if reviewed and len(audited) != config.detailed_audit_queries:
         raise BenchmarkError("V1 requires 15 fully audited queries.")
     pool = {case.source_id: case for case in cases if _eligible(case, config)}
     if len(positive_union) > config.candidate_max:
@@ -371,6 +377,7 @@ def assemble(
     for candidate in candidates:
         final_strata[_stratum(candidate)].append(candidate.source_id)
     manifest = BenchmarkManifest(
+        review_status="reviewed" if reviewed else "review_required",
         config=config,
         code_sha256=_code_digest(),
         source_corpus_sha256=digest(artifact["sources.jsonl"]),
@@ -386,11 +393,44 @@ def assemble(
             for split in ("dev", "test")
         },
         audited_query_ids=audited,
-        leakage_reviewed_queries=len(items),
+        leakage_reviewed_queries=sum(
+            s.review_status == "reviewed" for s in inputs.selections
+        ),
         exclusions=exclusions,
         exclusion_counts=dict(Counter(item.reason for item in exclusions)),
     )
     artifact["manifest.json"] = canonical(manifest) + "\n"
+    artifact["audit.json"] = (
+        json.dumps(
+            [
+                {
+                    "query_id": item.query_id,
+                    "source_case_id": item.source_case_id,
+                    "case_name": by_id[item.source_case_id].name,
+                    "date": item.query_date.isoformat(),
+                    "excerpt": item.query_text,
+                    "positive_case_ids": item.positive_case_ids,
+                    "depths_by_opinion_id": evidence[item.source_opinion_id].depths,
+                    "exclusions": [
+                        e.model_dump()
+                        for e in exclusions
+                        if e.query_id == item.query_id
+                    ],
+                    "automated_leakage_check": "passed",
+                    "human_review_status": next(
+                        s.review_status
+                        for s in inputs.selections
+                        if s.query_id == item.query_id
+                    ),
+                }
+                for item in items
+            ],
+            sort_keys=True,
+            ensure_ascii=False,
+            indent=2,
+        )
+        + "\n"
+    )
     return artifact
 
 

@@ -62,6 +62,7 @@ def test_offline_cli_roundtrip(
     assert json.loads(capsys.readouterr().out)["status"] == "valid"
     assert {p.name for p in Path(output).iterdir()} == {
         "manifest.json",
+        "audit.json",
         "config.json",
         "sources.jsonl",
         "candidates.jsonl",

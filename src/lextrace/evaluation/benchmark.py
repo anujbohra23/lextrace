@@ -24,7 +24,7 @@ class BenchmarkConfig(Record):
     format_version: Literal[1] = 1
     benchmark_id: Literal["citation-recovery-v1"] = "citation-recovery-v1"
     task: Literal["Citation-Recovery Benchmark"] = "Citation-Recovery Benchmark"
-    generation_rules: Literal["citation-recovery-v1.0"] = "citation-recovery-v1.0"
+    generation_rules: Literal["citation-recovery-v1.1"] = "citation-recovery-v1.1"
     normalizer_version: Literal["milestone-1"] = "milestone-1"
     query_court: Literal["ca2"] = "ca2"
     query_date_start: date = date(2010, 1, 1)
@@ -42,6 +42,8 @@ class BenchmarkConfig(Record):
     excerpt_max_words: Literal[300] = 300
     detailed_audit_queries: Literal[15] = 15
     selection_seed: int = 1729
+    distractor_frame_year_start: Literal[2000] = 2000
+    distractor_frame_per_court_year: Literal[60] = 60
     distractor_sampling: Literal["court-year-sha256-round-robin-v1"] = (
         "court-year-sha256-round-robin-v1"
     )
@@ -95,12 +97,32 @@ class QuerySelection(Record):
     transformation: Literal["remove-spans-collapse-whitespace-v1"] = (
         "remove-spans-collapse-whitespace-v1"
     )
-    leakage_reviewer: Text
-    leakage_review_approved: Literal[True]
-    known_alias_review_complete: Literal[True]
+    review_status: Literal["review_required", "reviewed"] = "reviewed"
+    leakage_reviewer: Text | None = None
+    leakage_review_approved: bool = False
+    known_alias_review_complete: bool = False
     selection_note: Text
     audit_reviewer: Text | None = None
     positive_audits: list[PositiveAudit] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def honest_review(self) -> Self:
+        if self.review_status == "reviewed":
+            if not (
+                self.leakage_reviewer
+                and self.leakage_review_approved
+                and self.known_alias_review_complete
+            ):
+                raise ValueError("Reviewed queries require explicit human review.")
+        elif (
+            self.leakage_reviewer
+            or self.leakage_review_approved
+            or self.known_alias_review_complete
+            or self.audit_reviewer
+            or self.positive_audits
+        ):
+            raise ValueError("Provisional queries cannot claim human review.")
+        return self
 
 
 class CitationEvidence(Record):
@@ -110,7 +132,22 @@ class CitationEvidence(Record):
     cited_opinion_ids: list[SourceId]
     relation_source: Literal["opinions_cited", "opinions-cited"]
     payload_sha256: Digest
+    depths: dict[SourceId, Annotated[int, Field(strict=True, ge=0)]] = Field(
+        default_factory=dict
+    )
+    page_sha256: list[Digest] = Field(default_factory=list)
     complete: Literal[True]
+
+    @model_validator(mode="after")
+    def depth_evidence(self) -> Self:
+        if self.depths and set(self.depths) != set(self.cited_opinion_ids):
+            raise ValueError("Depth evidence must cover exactly the observed opinions.")
+        if (
+            self.page_sha256
+            and digest("\n".join(self.page_sha256)) != self.payload_sha256
+        ):
+            raise ValueError("Citation page aggregate hash mismatch.")
+        return self
 
 
 class OpinionMapping(Record):
@@ -180,6 +217,7 @@ class Exclusion(Record):
 
 class BenchmarkManifest(Record):
     format_version: Literal[1] = 1
+    review_status: Literal["review_required", "reviewed"]
     config: BenchmarkConfig
     code_sha256: Digest
     source_corpus_sha256: Digest

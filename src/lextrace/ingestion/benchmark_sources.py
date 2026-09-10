@@ -1,10 +1,10 @@
 """Offline adapters for frozen CourtListener citation metadata; no acquisition."""
 
 import re
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from lextrace.config import COURTLISTENER_API_BASE_URL
 from lextrace.ingestion.courtlistener import IngestionError, PositiveId
@@ -29,7 +29,7 @@ class OpinionMetadataResponse(BaseModel):
 class CitationRelationResponse(BaseModel):
     citing_opinion: str
     cited_opinion: str
-    depth: PositiveId
+    depth: Annotated[int, Field(strict=True, ge=0)]
 
 
 class CitationPageResponse(BaseModel):

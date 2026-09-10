@@ -80,7 +80,31 @@ unjudged candidates by court/year using seeded hashes and publishes a reproducib
 bundle. `ingestion/benchmark_sources.py` parses frozen external metadata only.
 It performs no acquisition. Existing ingestion and text normalization are intact.
 
-Only candidates.jsonl is eligible for a future retrieval index. Full source cases,
+Only candidates.jsonl is eligible for the retrieval index. Full source cases,
 weak labels, excerpt removals, and audits are evaluation provenance, not retriever
 inputs. Reporter citations remain distinct from opinion-to-opinion relationships.
-See [the V1 protocol](benchmark-v1.md) for limitations and deferred metric definitions.
+See [the V1 protocol](benchmark-v1.md) for limitations and metric definitions.
+
+
+## Milestone 3: acquisition and local baseline
+
+`ingestion/benchmark_acquisition.py` isolates Search/REST resource schemas,
+field selection, safe pagination, sequential pacing, quota checks, and a hashed
+response cache. `benchmark_job.py` composes these into resumable Case/provenance
+inputs. Request failures preserve work; invalid records have explicit rejection
+metadata. No new provider abstraction or changes to approved text normalization
+were needed. The official bulk citation map was assessed, but its 526 MB snapshot
+would not remove the dominant text/metadata REST cost for this pilot.
+
+`evaluation/excerpts.py` proposes source-offset windows and mechanical removals.
+The builder distinguishes review_required from reviewed; provisional construction
+does not impersonate human review. `audit.json` exposes review work for all queries.
+Generation code fingerprints, source/provenance hashes, frozen IDs, fixed cutoff,
+and complete positive coverage remain validation requirements.
+
+`retrieval/bm25.py` indexes all stored opinions of each Case in order, using only
+text. Its API accepts query ID/text, never labels or source-case metadata.
+`evaluation/retrieval_metrics.py` defines binary citation-recovery metrics.
+`evaluation/retrieval_run.py` validates the bundle before ranking and writes ignored
+run artifacts, split metrics, timings, hashes, and descriptive error flags.
+No new runtime dependencies, databases, or model services were added.

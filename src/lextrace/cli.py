@@ -15,6 +15,8 @@ from lextrace.corpus import CorpusError, CorpusQuery
 from lextrace.evaluation.benchmark import BenchmarkError
 from lextrace.evaluation.benchmark_build import build_benchmark, validate_benchmark
 from lextrace.evaluation.corpus_quality import inspect_corpus
+from lextrace.evaluation.retrieval_run import run_bm25
+from lextrace.ingestion.benchmark_job import acquire_benchmark
 from lextrace.ingestion.corpus import ingest_corpus
 from lextrace.ingestion.courtlistener import IngestionError, fetch_case
 from lextrace.ingestion.normalize import normalize_case
@@ -78,11 +80,41 @@ def main(
         "validate-benchmark", help="Verify a frozen citation-recovery bundle offline"
     )
     validate.add_argument("bundle", type=Path)
+    acquisition = commands.add_parser(
+        "acquire-benchmark", help="Acquire resumable provisional V1 source inputs"
+    )
+    acquisition.add_argument("--output", type=Path, required=True)
+    acquisition.add_argument("--request-interval", type=_interval, default=15)
+    acquisition.add_argument("--timeout", type=_interval, default=90)
+    acquisition.add_argument("--max-requests", type=_cluster_id, default=40)
+    baseline = commands.add_parser(
+        "run-bm25", help="Evaluate BM25 on a validated local benchmark"
+    )
+    baseline.add_argument("bundle", type=Path)
+    baseline.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return
     try:
+        if args.command == "acquire-benchmark":
+            result = acquire_benchmark(
+                args.output,
+                courtlistener_token(),
+                interval=args.request_interval,
+                timeout=args.timeout,
+                max_requests=args.max_requests,
+                transport=transport,
+            )
+            print(json.dumps(result, sort_keys=True, indent=2))
+            if result["status"] != "ready_for_build":
+                parser.exit(1, "Acquisition incomplete; cached work is preserved.\n")
+            return
+        if args.command == "run-bm25":
+            print(
+                json.dumps(run_bm25(args.bundle, args.output), sort_keys=True, indent=2)
+            )
+            return
         if args.command == "build-benchmark":
             print(
                 json.dumps(

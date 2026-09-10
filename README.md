@@ -126,21 +126,31 @@ JSONL with a line number instead of treating invalid input as a valid Case.
 Valid cases already require usable text, so missing-text counts are not reported.
 Both corpus and manifest files under `data/` are ignored by Git.
 
-## Citation-Recovery Benchmark (Milestone 3A)
+## Citation-Recovery Benchmark and BM25
 
-The offline benchmark builder freezes 25 reviewed 2010 Second Circuit queries
-and 200–500 pre-2010 Second Circuit/Supreme Court candidates. Citation-derived
-positives are weak labels; other candidates are unjudged, not proven irrelevant.
-No real benchmark has been acquired or annotated yet. See
-[the V1 design and input protocol](docs/benchmark-v1.md).
+V1 targets 25 Second Circuit query decisions from 2010 and 200–500 earlier
+Second Circuit/Supreme Court candidates. Citation-derived positives are weak
+labels; other candidates are unjudged. Automated excerpts remain review_required.
+The live pilot succeeded, but account quota blocked full acquisition; no real
+V1 BM25 scores are available yet. See [the protocol](docs/benchmark-v1.md) and
+[the live acquisition and baseline report](docs/retrieval-baseline.md).
 
 ```sh
-lextrace build-benchmark --corpus data/benchmarks/v1/source_cases.jsonl \
-  --inputs data/benchmarks/v1/reviewed_inputs.json \
+# Token must already be in the environment; this command does not load .env.
+lextrace acquire-benchmark --output data/benchmarks/v1/acquisition \
+  --request-interval 15 --timeout 90 --max-requests 40
+# Reinvoke the same command to resume from the hash-checked cache.
+# Only build once the required query/candidate counts and evidence are complete.
+lextrace build-benchmark --corpus data/benchmarks/v1/acquisition/sources.jsonl \
+  --inputs data/benchmarks/v1/acquisition/inputs.json \
   --config experiments/configs/benchmark_v1.json \
-  --output data/benchmarks/v1/frozen
-lextrace validate-benchmark data/benchmarks/v1/frozen
+  --output data/benchmarks/v1/candidate
+lextrace validate-benchmark data/benchmarks/v1/candidate
+lextrace run-bm25 data/benchmarks/v1/candidate --output artifacts/bm25-v1
 ```
 
-These commands require frozen local inputs and human reviews. They do not read
-credentials or access CourtListener. Retrieval and metrics are deferred.
+Only acquisition reads credentials. Build, validation, and BM25 are offline.
+BM25 indexes candidate opinion text only and ranks every candidate for each
+query. Outputs contain rankings, macro/per-query metrics, latency, hashes, and
+automated error flags. Human-unreviewed results are labeled PROVISIONAL.
+Generated data and experiment outputs are ignored by Git.
