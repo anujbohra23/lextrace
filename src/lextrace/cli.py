@@ -20,6 +20,8 @@ from lextrace.ingestion.benchmark_job import acquire_benchmark
 from lextrace.ingestion.corpus import ingest_corpus
 from lextrace.ingestion.courtlistener import IngestionError, fetch_case
 from lextrace.ingestion.normalize import normalize_case
+from lextrace.retrieval.commands import add_commands, run_command
+from lextrace.retrieval.contracts import RetrievalError
 
 
 def _cluster_id(value: str) -> int:
@@ -92,11 +94,14 @@ def main(
     )
     baseline.add_argument("bundle", type=Path)
     baseline.add_argument("--output", type=Path, required=True)
+    add_commands(commands)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return
     try:
+        if run_command(args, parser):
+            return
         if args.command == "acquire-benchmark":
             result = acquire_benchmark(
                 args.output,
@@ -167,7 +172,13 @@ def main(
             return
         token = courtlistener_token()
         case = normalize_case(*fetch_case(args.cluster_id, token, transport=transport))
-    except (IngestionError, ConfigurationError, CorpusError, BenchmarkError) as error:
+    except (
+        IngestionError,
+        ConfigurationError,
+        CorpusError,
+        BenchmarkError,
+        RetrievalError,
+    ) as error:
         parser.exit(1, f"Error: {error}\n")
     except KeyboardInterrupt:
         parser.exit(130, "Interrupted; completed corpus records are preserved.\n")

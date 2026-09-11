@@ -11,7 +11,7 @@ Use Python 3.12:
 ```sh
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e '.[dev,retrieval]'
 pre-commit install
 ```
 
@@ -154,3 +154,103 @@ BM25 indexes candidate opinion text only and ranks every candidate for each
 query. Outputs contain rankings, macro/per-query metrics, latency, hashes, and
 automated error flags. Human-unreviewed results are labeled PROVISIONAL.
 Generated data and experiment outputs are ignored by Git.
+
+## Retrieval Engine v1
+
+The local retrieval engine searches any normalized Case JSONL corpus without a
+database. Build an index once, inspect its identity, and search it through one
+contract:
+
+```sh
+lextrace build-index --corpus data/cases.jsonl \
+  --output artifacts/indexes/default \
+  --config experiments/configs/retrieval_engine_v1.json
+lextrace index-info artifacts/indexes/default
+lextrace search "employee fired after discussing salary with coworkers" \
+  --mode reranked --top-k 10 --json
+lextrace search "search and seizure" --mode hybrid --court ca2 \
+  --filed-after 2000-01-01 --filed-before 2010-12-31
+```
+
+`build-index --lexical-only` creates a BM25-only index. Search modes are `bm25`,
+`dense`, `hybrid`, and `reranked`. Human output contains rank, case metadata,
+reporter citations, score, one evidence passage, its source URL, diagnostics,
+and stage timings; `--json` returns the typed SearchResponse. Canonical opinion
+text is never rewritten. Evidence passages retain the opinion ID, exact character
+offsets, and a stable content-derived ID.
+
+```mermaid
+flowchart TD
+    CL[CourtListener] --> C[Normalized Case corpus]
+    C --> B[BM25]
+    C --> D[Dense retrieval]
+    B --> R[Reciprocal rank fusion]
+    D --> R
+    R --> X[Cross-encoder reranking]
+    X --> E[Evidence passage]
+    E --> U[CLI / FastAPI]
+```
+
+BM25 uses the existing lowercase Unicode-alphanumeric tokenizer and Okapi
+scoring. Dense search uses exact blockwise cosine scoring over memory-mapped
+NumPy vectors. Hybrid search applies deterministic reciprocal rank fusion with
+`k=60`; reranked search applies the cross-encoder to the two strongest lexical
+passages from each shortlisted case. Ties resolve by numeric source ID and
+duplicate case IDs are removed.
+
+The embedding model is
+[`sentence-transformers/all-MiniLM-L6-v2`](https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2)
+at revision `1110a243fdf4706b3f48f1d95db1a4f5529b4d41`. The reranker is
+[`cross-encoder/ms-marco-MiniLM-L6-v2`](https://huggingface.co/cross-encoder/ms-marco-MiniLM-L6-v2)
+at revision `233902d25c440f23af6f7d6e94d2946bac0bee0a`. These compact English
+MiniLM models were selected for practical local CPU inference; neither is a
+legal-domain model. Models are downloaded to ignored `artifacts/models/` on first
+use. CPU is the supported default. Configured MPS use falls back to CPU when MPS
+is unavailable; inference failures remain explicit rather than changing ranking
+methods silently.
+
+Long passages are tokenized into deterministic 256-token windows with 32-token
+overlap. Token IDs pass directly to the model, so tokenizer overflow boundaries
+do not lose or re-tokenize text. Each window embedding is unit normalized; their
+mean is normalized into a passage vector. Passage vectors are averaged and
+normalized into the case vector. Window size, overlap, passage size, model and
+revision, preprocessing version, corpus hash, and pooling version are part of
+index identity. A mismatch or checksum failure requires a new index directory.
+
+Run the API against the default index, or set `LEXTRACE_INDEX_PATH`:
+
+```sh
+uvicorn lextrace.api.app:app --reload
+curl -X POST http://127.0.0.1:8000/search \
+  -H 'content-type: application/json' \
+  -d '{"query":"wage retaliation","mode":"hybrid","top_k":5,"filters":{"courts":["ca2"]}}'
+curl http://127.0.0.1:8000/cases/2812209
+```
+
+`GET /health` never initializes an index. `POST /search` lazily loads one shared
+engine per process, and `GET /cases/{source_id}` returns its canonical Case or
+404. Invalid requests receive FastAPI validation errors; safe index/model errors
+return 503.
+
+Each search emits a structured trace containing a request ID, mode, corpus hash,
+index version, query length (never query text), candidate counts, queue and
+per-stage seconds, total latency, and pinned model identities. The engine can be
+evaluated offline with:
+
+```sh
+lextrace evaluate-engine data/benchmarks/v1/candidate \
+  --index artifacts/indexes/default --output artifacts/engine-eval-v1 \
+  --modes bm25 dense hybrid reranked
+```
+
+The adapter validates benchmark/corpus hashes and reports Recall@5/10/20, MRR,
+NDCG@10, and mean/p50/p95 latency. Human-unreviewed bundles stay PROVISIONAL;
+fixture metrics are tests, not retrieval-quality evidence.
+
+The engineering smoke test used 14 previously saved real CourtListener cases.
+It verified all modes, API lifecycle, filters, exact evidence offsets, and warm
+local inference. It does not establish retrieval quality: the sample is too small
+and several illustrative queries have no clearly responsive case. Exact NumPy
+search is intentionally simple and scales linearly; BM25 text and corpus records
+also remain in memory. The cross-encoder sees only selected 128-word passages,
+and lexical passage selection can miss semantically relevant evidence.

@@ -93,8 +93,14 @@ class LexTraceRetriever:
 
     def search_response(self, request: SearchRequest) -> SearchResponse:
         # Serialize local model use; traces and results stay request-local.
+        waiting = time.perf_counter()
         with self._lock:
-            return self._search(request)
+            queue_seconds = time.perf_counter() - waiting
+            response = self._search(request)
+            response.trace.stage_seconds["queue"] = queue_seconds
+            response.trace.stage_seconds["total"] += queue_seconds
+            logger.info(response.trace.model_dump_json())
+            return response
 
     def _search(self, request: SearchRequest) -> SearchResponse:
         start = time.perf_counter()
@@ -229,6 +235,7 @@ class LexTraceRetriever:
                     selected, values[offset : offset + len(selected)], strict=True
                 ):
                     passage.score = score
+                    passage.scoring_method = "cross-encoder"
                 selected.sort(key=lambda p: -p.score)
                 diagnostics[identifier].reranker_score = selected[0].score
                 offset += len(selected)
@@ -257,5 +264,4 @@ class LexTraceRetriever:
                 )
             )
         trace.stage_seconds["total"] = time.perf_counter() - start
-        logger.info(trace.model_dump_json())
         return SearchResponse(results=results, trace=trace)

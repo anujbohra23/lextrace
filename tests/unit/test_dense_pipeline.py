@@ -99,6 +99,11 @@ def test_index_cache_alignment(
     config.dense.revision = "a" * 40
     with pytest.raises(RetrievalError, match="mismatch"):
         LocalIndex(output, config=config)
+    for field, value in (("window_tokens", 128), ("window_overlap_tokens", 16)):
+        config = EngineConfig()
+        setattr(config.dense, field, value)
+        with pytest.raises(RetrievalError, match="mismatch"):
+            LocalIndex(output, config=config)
     (output / "document_map.json").write_text('["3","2","1"]')
     with pytest.raises(RetrievalError, match="checksums"):
         LocalIndex(output)

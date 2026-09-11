@@ -65,31 +65,50 @@ class SentenceEncoder:
         """Pool all token windows instead of silently truncating long text."""
         try:
             model = self._load()
-            chunks: list[str] = []
+            import torch
+
+            chunks: list[list[int]] = []
             ranges: list[tuple[int, int]] = []
-            width = int(model.max_seq_length) - 2
             for text in texts:
-                tokens = model.tokenizer.encode(text, add_special_tokens=False)
-                if not tokens:
-                    raise RetrievalError("Text has no model tokens.")
-                start = len(chunks)
-                chunks.extend(
-                    model.tokenizer.decode(
-                        tokens[i : i + width], skip_special_tokens=True
-                    )
-                    for i in range(0, len(tokens), width)
+                tokenized = model.tokenizer(
+                    text,
+                    add_special_tokens=True,
+                    truncation=True,
+                    max_length=min(
+                        self.settings.window_tokens, int(model.max_seq_length)
+                    ),
+                    stride=self.settings.window_overlap_tokens,
+                    return_overflowing_tokens=True,
+                    return_attention_mask=True,
+                    verbose=False,
                 )
+                windows = tokenized["input_ids"]
+                if not windows:
+                    raise RetrievalError("Text has no model token windows.")
+                start = len(chunks)
+                chunks.extend(windows)
                 ranges.append((start, len(chunks)))
-            encoded = np.asarray(
-                model.encode(
-                    chunks,
-                    batch_size=self.settings.batch_size,
-                    show_progress_bar=False,
-                    convert_to_numpy=True,
-                    normalize_embeddings=True,
-                ),
-                dtype=np.float32,
-            )
+            batches: list[Vector] = []
+            with torch.inference_mode():
+                for start in range(0, len(chunks), self.settings.batch_size):
+                    features = model.tokenizer.pad(
+                        {"input_ids": chunks[start : start + self.settings.batch_size]},
+                        padding=True,
+                        return_tensors="pt",
+                    )
+                    features = {
+                        key: value.to(model.device) for key, value in features.items()
+                    }
+                    batches.append(
+                        np.asarray(
+                            model(features)["sentence_embedding"]
+                            .detach()
+                            .cpu()
+                            .numpy(),
+                            dtype=np.float32,
+                        )
+                    )
+            encoded = unit(np.concatenate(batches, axis=0))
             return unit(
                 np.asarray(
                     [encoded[first:last].mean(axis=0) for first, last in ranges],

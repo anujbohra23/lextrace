@@ -4,12 +4,13 @@ import math
 import re
 from collections import Counter
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated
 
 from pydantic import Field
 
 from lextrace.domain.case import Case
 from lextrace.evaluation.benchmark import BenchmarkError, Record, SourceId, Text
+from lextrace.retrieval.contracts import Mode
 
 
 def tokenize(text: str) -> list[str]:
@@ -22,7 +23,7 @@ class RankedResult(Record):
     case_id: SourceId
     rank: Annotated[int, Field(strict=True, gt=0)]
     score: Annotated[float, Field(allow_inf_nan=False)]
-    method: Literal["bm25"] = "bm25"
+    method: Mode = "bm25"
     run_id: Text
 
 

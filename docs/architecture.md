@@ -1,7 +1,7 @@
 # Architecture
 
-LexTrace is one Python package with a health-only FastAPI application and a
-synchronous CLI ingestion flows. Database persistence and retrieval remain deferred.
+LexTrace is one Python package with synchronous ingestion and retrieval CLI flows
+and a FastAPI application. Database persistence remains deferred.
 
 ## Implemented ingestion flow
 
@@ -40,7 +40,7 @@ tests/fixtures/. Ranking, retrieval, and evaluation packages remain placeholders
 
 ## Deferred infrastructure
 
-No database, embeddings, vector store, LLM, RAG, agents, or frontend is included.
+No database, external vector store, LLM, RAG, agents, or frontend is included.
 
 ## Milestone 2: local corpora
 
@@ -108,3 +108,39 @@ text. Its API accepts query ID/text, never labels or source-case metadata.
 `evaluation/retrieval_run.py` validates the bundle before ranking and writes ignored
 run artifacts, split metrics, timings, hashes, and descriptive error flags.
 No new runtime dependencies, databases, or model services were added.
+
+## Retrieval Engine v1
+
+`retrieval/documents.py` presents canonical Case records as a stable corpus,
+concatenating every stored opinion in order for ranking. `passages.py` splits each
+opinion independently into bounded word windows and retains exact source offsets.
+The original Case and Opinion objects are unchanged.
+
+`bm25.py` remains the sole lexical implementation. `dense.py` performs exact,
+blockwise cosine search over a memory-mapped float32 matrix. `fusion.py` combines
+lexical and dense ranks with reciprocal rank fusion. `engine.py` applies metadata
+filters before ranking, coordinates all four retrieval modes, optionally reranks
+the strongest two lexical evidence passages per case, and returns the common
+typed result and trace contracts from `contracts.py`.
+
+`models.py` lazily loads pinned local sentence-transformer models. Embedding input
+uses overlapping tokenizer overflow windows represented by token IDs. Window
+vectors are unit-normalized, averaged, and normalized; the index builder applies
+the same stable mean-and-normalize operation across all passages in a case. This
+preserves full long-document coverage without altering source text.
+
+`index.py` publishes a canonical corpus snapshot, numeric document map, optional
+dense matrix, and metadata atomically under `artifacts/indexes/`. Metadata records
+file checksums, corpus hash/count, exact configuration, model revisions, window
+settings, preprocessing/tokenizer/pooling versions, package versions, device, and
+backend. Loads reject corrupt files, changed corpora, or incompatible
+representation settings. Pickle is never used.
+
+`retrieval/commands.py` exposes build, inspection, search, and benchmark evaluation
+commands. `api/app.py` lazily initializes a single process-local engine and exposes
+health, typed search, and canonical-case endpoints. Structured search logs omit
+query text and include only request identity, query length, candidate counts,
+model versions, and timings.
+
+The exact NumPy backend and in-memory lexical corpus suit reproducible small and
+moderate local experiments. They are not a web-scale serving architecture.

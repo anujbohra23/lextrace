@@ -21,9 +21,11 @@ as Case objects; safe rejection reasons belong only in run metadata.
 ## Build, Test, and Development Commands
 
 Use Python 3.12 and an activated virtual environment. Install the package and
-development tools with `python -m pip install -e '.[dev]'`.
+development and retrieval tools with `python -m pip install -e '.[dev,retrieval]'`.
 
 - `uvicorn lextrace.api.app:app --reload`: start the local API.
+- `lextrace build-index --corpus data/cases.jsonl`: build the default local index.
+- `lextrace search "query" --mode reranked`: search through the common contract.
 - `pytest`: run the test suite.
 - `ruff check .`: check lint rules and import ordering.
 - `ruff format --check .`: verify formatting; use `ruff format .` to apply it.
@@ -65,3 +67,13 @@ Keep its fixed temporal bounds, reviewed query provenance, and complete positive
 union intact. Call other candidates unjudged. Build/validate and BM25 commands are offline; acquisition is separately authorized
 and quota-bounded. Never present provisional excerpts as human-reviewed. Keep
 source opinion text unchanged and generated artifacts under data/benchmarks/v1/.
+
+## Retrieval Conventions
+
+Keep one canonical Case corpus and one BM25 implementation. Retrieval modes must
+return the common typed result contract, preserve exact evidence offsets, apply
+metadata filters before ranking, remove duplicate IDs, and use numeric source-ID
+tie breaks. Include every representation-affecting model, window, passage, and
+preprocessing setting in index identity. Tests inject fake encoders/rerankers and
+must not download models or access the network. Treat the 14-case corpus as an
+engineering smoke fixture, never as retrieval-quality evidence.

@@ -31,8 +31,10 @@ def representation(config: EngineConfig) -> str:
                 "model": config.dense.model,
                 "revision": config.dense.revision,
                 "passages": config.passages.words,
+                "window_tokens": config.dense.window_tokens,
+                "window_overlap_tokens": config.dense.window_overlap_tokens,
                 "preprocessing": config.preprocessing,
-                "pooling": "unit-mean-all-token-windows-and-passages-v1",
+                "pooling": "unit-mean-overlapping-token-id-windows-and-passages-v2",
             },
             sort_keys=True,
         )
@@ -41,6 +43,12 @@ def representation(config: EngineConfig) -> str:
 
 class IndexMetadata(Record):
     format_version: Literal[1] = 1
+    lexical_tokenizer: Literal["unicode-alphanumeric-lowercase-v1"] = (
+        "unicode-alphanumeric-lowercase-v1"
+    )
+    dense_pooling: Literal[
+        "overlapping-overflow-windows-then-passages-unit-mean-v2"
+    ] = "overlapping-overflow-windows-then-passages-unit-mean-v2"
     corpus_hash: str
     document_count: int
     source_corpus: str

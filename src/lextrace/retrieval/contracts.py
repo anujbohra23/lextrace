@@ -51,6 +51,7 @@ class Passage(Record):
     end: Positive
     text: str
     score: Finite = 0
+    scoring_method: Literal["lexical-evidence", "cross-encoder"] = "lexical-evidence"
 
 
 class Diagnostics(Record):

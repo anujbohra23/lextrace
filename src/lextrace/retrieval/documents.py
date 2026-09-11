@@ -1,5 +1,6 @@
 """Deterministic read-only retrieval view over canonical Case records."""
 
+import re
 from pathlib import Path
 
 from lextrace.corpus import CorpusError, read_cases, serialize_cases
@@ -14,7 +15,7 @@ class Corpus:
         if (
             not ids
             or len(ids) != len(set(ids))
-            or any(not i.isascii() or not i.isdecimal() or int(i) < 1 for i in ids)
+            or any(re.fullmatch(r"[1-9][0-9]*", i) is None for i in ids)
         ):
             raise RetrievalError(
                 "Corpus requires unique positive case IDs and records."

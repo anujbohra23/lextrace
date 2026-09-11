@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import Field, ValidationError
+from pydantic import Field, ValidationError, model_validator
 
 from lextrace.retrieval.contracts import Mode, Positive, Record, RetrievalError
 
@@ -25,7 +25,15 @@ class DenseSettings(Record):
     )
     batch_size: Positive = 32
     block_size: Positive = 4096
+    window_tokens: Annotated[int, Field(strict=True, ge=16, le=256)] = 256
+    window_overlap_tokens: Annotated[int, Field(strict=True, ge=0, le=64)] = 32
     device: Literal["cpu", "mps"] = "cpu"
+
+    @model_validator(mode="after")
+    def validate_window(self) -> "DenseSettings":
+        if self.window_overlap_tokens >= self.window_tokens - 2:
+            raise ValueError("Token-window overlap must leave room for content.")
+        return self
 
 
 class RerankerSettings(Record):
