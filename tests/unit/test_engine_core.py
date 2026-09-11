@@ -95,7 +95,7 @@ def test_bm25_engine_diagnostics(
     benchmark_sample: Sample, caplog: pytest.LogCaptureFixture
 ) -> None:
     cases, _, _ = benchmark_sample
-    engine = LexTraceRetriever(Corpus(cases[:10]))
+    engine = LexTraceRetriever(Corpus(cases[:10]), mode="bm25")
     with caplog.at_level("INFO", logger="lextrace.retrieval"):
         response = engine.search_response(
             SearchRequest(

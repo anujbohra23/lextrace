@@ -1,13 +1,18 @@
-"""High-level local case search. No CourtListener requests or benchmark labels."""
+"""Local case retrieval: lexical/dense → RRF → passage cross-encoder → results."""
 
 import logging
+import math
+import threading
 import time
 import uuid
+from pathlib import Path
 
+from lextrace.evaluation.benchmark import BenchmarkError
 from lextrace.retrieval.bm25 import BM25, BM25Config
 from lextrace.retrieval.contracts import (
     Diagnostics,
     Mode,
+    Passage,
     RetrievalError,
     RetrievalResult,
     RetrievalTrace,
@@ -15,7 +20,17 @@ from lextrace.retrieval.contracts import (
     SearchRequest,
     SearchResponse,
 )
+from lextrace.retrieval.dense import dense_search
 from lextrace.retrieval.documents import Corpus
+from lextrace.retrieval.fusion import rrf
+from lextrace.retrieval.index import LocalIndex, representation
+from lextrace.retrieval.models import (
+    CrossScorer,
+    Encoder,
+    PairScorer,
+    SentenceEncoder,
+    Vector,
+)
 from lextrace.retrieval.passages import segment, select
 from lextrace.retrieval.settings import EngineConfig
 
@@ -24,14 +39,50 @@ logger = logging.getLogger("lextrace.retrieval")
 
 class LexTraceRetriever:
     def __init__(
-        self, corpus: Corpus, config: EngineConfig | None = None, *, mode: Mode = "bm25"
+        self,
+        corpus: Corpus,
+        config: EngineConfig | None = None,
+        *,
+        mode: Mode | None = None,
+        vectors: Vector | None = None,
+        encoder: Encoder | None = None,
+        scorer: PairScorer | None = None,
     ) -> None:
         self.corpus = corpus
         self.config = config or EngineConfig()
-        self.mode = mode
-        self.lexical = BM25(
-            corpus.cases, BM25Config(k1=self.config.bm25.k1, b=self.config.bm25.b)
-        )
+        self.mode = mode or self.config.default_mode
+        try:
+            self.lexical = BM25(
+                corpus.cases, BM25Config(k1=self.config.bm25.k1, b=self.config.bm25.b)
+            )
+        except BenchmarkError:
+            raise RetrievalError("Corpus has no valid searchable documents.") from None
+        self.vectors = vectors
+        if vectors is not None and (
+            vectors.ndim != 2 or vectors.shape[0] != len(corpus.ids)
+        ):
+            raise RetrievalError("Dense rows do not align with the corpus.")
+        self.encoder = encoder or SentenceEncoder(self.config.dense)
+        self.scorer = scorer or CrossScorer(self.config.reranker)
+        self._lock = threading.RLock()
+
+    @classmethod
+    def from_index(
+        cls,
+        path: Path,
+        *,
+        corpus_path: Path | None = None,
+        config: EngineConfig | None = None,
+    ) -> "LexTraceRetriever":
+        index = LocalIndex(path, corpus_path=corpus_path, config=config)
+        return cls(index.corpus, index.config, vectors=index.vectors)
+
+    def close(self) -> None:
+        with self._lock:
+            if isinstance(self.encoder, SentenceEncoder):
+                self.encoder.close()
+            if isinstance(self.scorer, CrossScorer):
+                self.scorer.close()
 
     def search(
         self, query: str, top_k: int = 10, filters: SearchFilters | None = None
@@ -41,50 +92,170 @@ class LexTraceRetriever:
         ).results
 
     def search_response(self, request: SearchRequest) -> SearchResponse:
+        # Serialize local model use; traces and results stay request-local.
+        with self._lock:
+            return self._search(request)
+
+    def _search(self, request: SearchRequest) -> SearchResponse:
         start = time.perf_counter()
-        if request.mode != "bm25":
-            raise RetrievalError("This mode requires the dense retrieval pipeline.")
+        config = self.config
         eligible = self.corpus.eligible(request.filters)
         trace = RetrievalTrace(
             request_id=uuid.uuid4().hex,
             mode=request.mode,
             corpus_hash=self.corpus.hash,
-            index_version="1",
+            index_version="1:" + representation(config)[:16],
             query_length=len(request.query),
+            candidate_counts={
+                key: 0 for key in ("bm25", "dense", "hybrid", "reranked")
+            },
+            stage_seconds={
+                key: 0.0
+                for key in ("bm25", "dense", "fusion", "reranker", "passages", "total")
+            },
+            embedding_model=None
+            if request.mode == "bm25"
+            else config.dense.model + "@" + config.dense.revision,
+            reranker_model=config.reranker.model + "@" + config.reranker.revision
+            if request.mode == "reranked"
+            else None,
+        )
+        diagnostics: dict[str, Diagnostics] = {}
+        lexical: list[tuple[str, float]] = []
+        dense: list[tuple[str, float]] = []
+        if eligible and request.mode != "dense":
+            before = time.perf_counter()
+            depth = (
+                request.top_k if request.mode == "bm25" else config.hybrid.lexical_depth
+            )
+            rows = self.lexical.rank(
+                trace.request_id,
+                request.query,
+                "engine-v1",
+                case_ids=eligible,
+                top_k=depth,
+            )
+            lexical = [(r.case_id, r.score) for r in rows]
+            for r in rows:
+                diagnostics[r.case_id] = Diagnostics(
+                    bm25_rank=r.rank, bm25_score=r.score
+                )
+            trace.stage_seconds["bm25"] = time.perf_counter() - before
+            trace.candidate_counts["bm25"] = len(lexical)
+        if eligible and request.mode != "bm25":
+            if self.vectors is None:
+                raise RetrievalError(
+                    "Dense mode requires a dense index; run build-index first."
+                )
+            before = time.perf_counter()
+            try:
+                query = self.encoder.encode([request.query])
+            except RetrievalError:
+                raise
+            except Exception:
+                raise RetrievalError("Embedding inference failed.") from None
+            depth = (
+                request.top_k if request.mode == "dense" else config.hybrid.dense_depth
+            )
+            dense = dense_search(
+                self.vectors,
+                self.corpus.ids,
+                query,
+                eligible,
+                depth,
+                config.dense.block_size,
+            )
+            for rank, (identifier, score) in enumerate(dense, 1):
+                diagnostic = diagnostics.setdefault(identifier, Diagnostics())
+                diagnostic.dense_rank = rank
+                diagnostic.dense_score = score
+            trace.stage_seconds["dense"] = time.perf_counter() - before
+            trace.candidate_counts["dense"] = len(dense)
+        ranked = lexical if request.mode == "bm25" else dense
+        if request.mode in {"hybrid", "reranked"}:
+            before = time.perf_counter()
+            ranked = rrf(
+                [i for i, _ in lexical],
+                [i for i, _ in dense],
+                config.hybrid.rrf_constant,
+            )[: config.hybrid.candidate_depth]
+            for identifier, score in ranked:
+                diagnostics[identifier].hybrid_score = score
+            trace.stage_seconds["fusion"] = time.perf_counter() - before
+            trace.candidate_counts["hybrid"] = len(ranked)
+        candidates = (
+            ranked[: config.reranker.candidate_depth]
+            if request.mode == "reranked"
+            else ranked[: request.top_k]
         )
         before = time.perf_counter()
-        ranked = [
-            r
-            for r in self.lexical.rank(trace.request_id, request.query, "engine-v1")
-            if r.case_id in eligible
-        ]
-        trace.stage_seconds["bm25"] = time.perf_counter() - before
-        trace.candidate_counts["bm25"] = len(ranked)
+        passages: dict[str, list[Passage]] = {
+            identifier: select(
+                segment(self.corpus.by_id[identifier], config.passages),
+                request.query,
+                self.lexical.idf,
+                config.passages.evidence_count,
+            )
+            for identifier, _ in candidates
+        }
+        trace.stage_seconds["passages"] = time.perf_counter() - before
+        if request.mode == "reranked" and candidates:
+            before = time.perf_counter()
+            pairs = [
+                (request.query, p.text)
+                for identifier, _ in candidates
+                for p in passages[identifier]
+            ]
+            try:
+                values = []
+                for offset in range(0, len(pairs), config.reranker.batch_size):
+                    batch = pairs[offset : offset + config.reranker.batch_size]
+                    scores = self.scorer.score(batch)
+                    if len(scores) != len(batch) or any(
+                        not math.isfinite(v) for v in scores
+                    ):
+                        raise RetrievalError("Reranker returned invalid scores.")
+                    values.extend(scores)
+            except RetrievalError:
+                raise
+            except Exception:
+                raise RetrievalError(
+                    "Reranking failed; no substitute ranking was returned."
+                ) from None
+            offset = 0
+            for identifier, _ in candidates:
+                selected = passages[identifier]
+                for passage, score in zip(
+                    selected, values[offset : offset + len(selected)], strict=True
+                ):
+                    passage.score = score
+                selected.sort(key=lambda p: -p.score)
+                diagnostics[identifier].reranker_score = selected[0].score
+                offset += len(selected)
+            ranked = sorted(
+                ((i, passages[i][0].score) for i, _ in candidates),
+                key=lambda row: (-row[1], int(row[0])),
+            )
+            trace.candidate_counts["reranked"] = len(ranked)
+            trace.stage_seconds["reranker"] = time.perf_counter() - before
         results: list[RetrievalResult] = []
-        before = time.perf_counter()
-        for row in ranked[: request.top_k]:
-            case = self.corpus.by_id[row.case_id]
-            passage = select(
-                segment(case, self.config.passages), request.query, self.lexical.idf, 1
-            )[0]
+        for identifier, score in ranked[: request.top_k]:
+            case = self.corpus.by_id[identifier]
             results.append(
                 RetrievalResult(
-                    case_id=case.source_id,
+                    case_id=identifier,
                     rank=len(results) + 1,
-                    final_score=row.score,
+                    final_score=score,
                     retrieval_method=request.mode,
                     case_name=case.name,
                     court=case.court_id,
                     date_filed=case.date_filed,
                     reporter_citations=case.reporter_citations,
                     source_url=case.source_url,
-                    relevant_passage=passage,
-                    diagnostics=Diagnostics(
-                        bm25_rank=len(results) + 1, bm25_score=row.score
-                    ),
+                    relevant_passage=passages[identifier][0],
+                    diagnostics=diagnostics[identifier],
                 )
             )
-        trace.stage_seconds["passages"] = time.perf_counter() - before
         trace.stage_seconds["total"] = time.perf_counter() - start
         logger.info(trace.model_dump_json())
         return SearchResponse(results=results, trace=trace)

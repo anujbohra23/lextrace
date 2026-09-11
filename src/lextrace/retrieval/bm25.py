@@ -70,10 +70,20 @@ class BM25:
             for term, count in df.items()
         }
 
-    def rank(self, query_id: str, query_text: str, run_id: str) -> list[RankedResult]:
+    def rank(
+        self,
+        query_id: str,
+        query_text: str,
+        run_id: str,
+        *,
+        case_ids: set[str] | None = None,
+        top_k: int | None = None,
+    ) -> list[RankedResult]:
         query = Counter(tokenize(query_text))
         scores: dict[str, float] = {}
         for identifier, document in self.documents.items():
+            if case_ids is not None and identifier not in case_ids:
+                continue
             norm = self.config.k1 * (
                 1
                 - self.config.b
@@ -88,6 +98,10 @@ class BM25:
                 for term, count in sorted(query.items())
             )
         ordered = sorted(scores, key=lambda key: (-scores[key], int(key)))
+        if top_k is not None:
+            if top_k < 1:
+                raise BenchmarkError("top_k must be positive.")
+            ordered = ordered[:top_k]
         return [
             RankedResult(
                 query_id=query_id,
