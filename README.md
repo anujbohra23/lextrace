@@ -11,7 +11,7 @@ Use Python 3.12:
 ```sh
 python3.12 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev,retrieval]'
+python -m pip install -e '.[dev,retrieval,research]'
 pre-commit install
 ```
 
@@ -28,6 +28,63 @@ lextrace --help
 ```
 
 The endpoint returns `{"status":"ok"}`.
+
+## Grounded legal research workflow
+
+The research layer orchestrates the existing retrieval engine and citation graph;
+it does not own indexes or graph storage. Install the `research` extra, export an
+API-compatible credential and an explicit model ID, then run:
+
+```sh
+export OPENAI_API_KEY='<provider-key>'
+export LEXTRACE_LLM_MODEL='<structured-output-model-id>'
+lextrace research "employee fired after discussing salary" \
+  --index artifacts/indexes/default --graph artifacts/graphs/default \
+  --jurisdiction ca2 --as-of 2026-01-01
+```
+
+Add `--json` for the complete typed response. `POST /research` accepts the same
+question, jurisdiction, date, and case bound. Prompts use versioned definitions;
+retrieved opinions are delimited as untrusted evidence. Provider errors are
+reduced to safe messages and never include prompts, source text, or credentials.
+
+```mermaid
+flowchart TD
+    Q[User question] --> I[Issue spotter]
+    I --> P[Research planner]
+    P --> R[Existing retrieval engine]
+    R --> G[Citation intelligence]
+    G --> A[Precedent analysis]
+    A --> S[Supporting argument]
+    A --> O[Opposing argument]
+    S --> M[Memo synthesis]
+    O --> M
+    M --> C[Atomic claims]
+    C --> V[LLM and deterministic verification]
+    V --> X[One bounded revision]
+    X --> F[Final grounding gate]
+```
+
+Each claim names retrieved case and passage IDs. Checks require the case and
+passage to exist, match one another and canonical metadata, include a source URL,
+and have been retrieved in that run. Unsupported or contradicted claims trigger
+at most one revision and remain explicit warnings if unresolved. Confidence is a
+qualitative heuristic derived from final support counts, not a calibrated score.
+Context selection is deterministic, case bounded, and word budgeted. The trace
+records workflow/prompt/model versions, latency, retrieval traces, retries, token
+counts, errors, and grounding counts. Cost stays null unless a provider supplies
+it; no price table is embedded.
+
+Runs have IDs but no persistent checkpoints in this milestone, avoiding private
+questions and evidence on disk by default. The offline evaluation helper measures
+retrieval coverage when labels exist, citation and passage existence, claim
+support, completion/errors/revisions, and latency/token/cost totals. Optional
+human or judge scoring is an extension point, never the grounding authority.
+
+LexTrace is a legal research system, not a substitute for professional legal
+advice. Results are limited by the local corpus, retrieval recall, source quality,
+provider reliability, and the lack of legal treatment classification or
+statistically calibrated confidence.
 
 ## Ingest one case
 

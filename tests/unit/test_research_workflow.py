@@ -2,13 +2,15 @@
 
 from typing import TypeVar
 
+import pytest
 from pydantic import BaseModel
 
 from lextrace.domain.case import Case
 from lextrace.evaluation.benchmark import BenchmarkConfig, BenchmarkInputs
-from lextrace.research.contracts import ResearchRequest, Usage
+from lextrace.research.contracts import ResearchError, ResearchRequest, Usage
 from lextrace.research.prompts import PromptDefinition
 from lextrace.research.workflow import ResearchConfig, ResearchWorkflow
+from lextrace.retrieval.contracts import RetrievalError
 from lextrace.retrieval.documents import Corpus
 from lextrace.retrieval.engine import LexTraceRetriever
 
@@ -21,9 +23,16 @@ class FakeLLM:
     model = "deterministic-v1"
     retries = 0
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        verification_status: str = "SUPPORTED",
+        fail_prompt: str | None = None,
+    ) -> None:
         self.usage = Usage()
         self.contexts: list[dict[str, object]] = []
+        self.verification_status = verification_status
+        self.fail_prompt = fail_prompt
 
     def generate(
         self,
@@ -35,6 +44,8 @@ class FakeLLM:
         self.usage.input_tokens += len(str(context).split())
         self.usage.output_tokens += 10
         self.contexts.append(context)
+        if definition.prompt_id == self.fail_prompt:
+            raise ResearchError("Configured provider operation failed.")
         passage = "passage"
         case = "1"
         evidence = context.get("evidence")
@@ -103,8 +114,10 @@ class FakeLLM:
                 "results": [
                     {
                         "claim_id": identifier,
-                        "status": "SUPPORTED",
-                        "support_score": 1,
+                        "status": self.verification_status,
+                        "support_score": (
+                            1 if self.verification_status == "SUPPORTED" else 0.4
+                        ),
                         "supporting_passage_ids": [pid],
                         "explanation": "Entailed by supplied evidence.",
                     }
@@ -186,6 +199,7 @@ def test_workflow_grounding_revision_and_bounds(benchmark_sample: Sample) -> Non
     assert result.verification_results[0].status == "SUPPORTED"
     assert result.grounding_summary.support_rate == 1
     assert result.trace.usage.calls == 10
+    assert sum(usage.calls for usage in result.trace.node_usage.values()) == 10
     assert any(
         "Ignore previous instructions" in str(context) for context in llm.contexts
     )
@@ -202,3 +216,44 @@ def test_no_evidence_is_degraded(benchmark_sample: Sample) -> None:
     assert not result.relevant_cases
     assert result.final_memo is None
     assert result.grounding_summary.confidence == "INSUFFICIENT_EVIDENCE"
+
+
+@pytest.mark.parametrize("status", ["PARTIALLY_SUPPORTED", "CONTRADICTED"])
+def test_weak_claim_is_revised_once(status: str, benchmark_sample: Sample) -> None:
+    cases, _, _ = benchmark_sample
+    llm = FakeLLM(verification_status=status)
+    workflow = ResearchWorkflow(LexTraceRetriever(Corpus(cases[:3])), llm)
+    result = workflow.run(ResearchRequest(question="Research the synthetic issue."))
+    assert result.trace.revision_count == 1
+    assert result.verification_results[0].status == status
+    assert result.grounding_summary.confidence == "LOW"
+
+
+def test_provider_failure_returns_degraded_result(benchmark_sample: Sample) -> None:
+    cases, _, _ = benchmark_sample
+    workflow = ResearchWorkflow(
+        LexTraceRetriever(Corpus(cases[:3])),
+        FakeLLM(fail_prompt="memo-synthesis"),
+    )
+    result = workflow.run(ResearchRequest(question="Research the synthetic issue."))
+    assert result.trace.status == "degraded"
+    assert result.final_memo is None
+    assert result.trace.tool_errors == ["Configured provider operation failed."]
+
+
+def test_retrieval_failure_returns_degraded_result(
+    benchmark_sample: Sample, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cases, _, _ = benchmark_sample
+    retriever = LexTraceRetriever(Corpus(cases[:3]))
+
+    def fail(*args: object, **kwargs: object) -> None:
+        raise RetrievalError("Local retrieval failed.")
+
+    monkeypatch.setattr(retriever, "search_response", fail)
+    result = ResearchWorkflow(retriever, FakeLLM()).run(
+        ResearchRequest(question="Research the synthetic issue.")
+    )
+    assert result.trace.status == "degraded"
+    assert not result.relevant_cases
+    assert "Local retrieval failed." in result.trace.tool_errors

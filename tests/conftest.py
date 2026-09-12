@@ -16,6 +16,60 @@ from lextrace.evaluation.benchmark import (
     Span,
     digest,
 )
+from lextrace.research.contracts import (
+    GroundingSummary,
+    ResearchResponse,
+    ResearchTrace,
+    Usage,
+)
+
+
+@pytest.fixture
+def empty_research_response() -> ResearchResponse:
+    return ResearchResponse.model_validate(
+        {
+            "run_id": "run-1",
+            "identified_issues": [],
+            "research_plan": [],
+            "relevant_cases": [],
+            "citation_relationships": [],
+            "case_analyses": [],
+            "supporting_arguments": [],
+            "opposing_arguments": [],
+            "final_memo": None,
+            "claims": [],
+            "verification_results": [],
+            "grounding_summary": GroundingSummary(
+                total_substantive_claims=0,
+                supported=0,
+                partially_supported=0,
+                unsupported=0,
+                contradicted=0,
+                insufficient_evidence=0,
+                support_rate=0,
+                confidence="INSUFFICIENT_EVIDENCE",
+            ),
+            "trace": ResearchTrace(
+                run_id="run-1",
+                status="completed",
+                nodes_executed=[],
+                node_seconds={},
+                node_usage={},
+                retrieval_trace_ids=[],
+                prompts=[],
+                provider="fake",
+                model="fake",
+                tool_errors=[],
+                retry_count=0,
+                evidence_count=0,
+                claims_generated=0,
+                claims_supported=0,
+                revision_count=0,
+                usage=Usage(),
+                total_seconds=0,
+            ),
+        }
+    )
 
 
 @pytest.fixture

@@ -1,0 +1,10 @@
+{
+  "version": "research-golden-v1",
+  "scenarios": [
+    {"id": "supported", "expected": "SUPPORTED"},
+    {"id": "conflicting", "expected": "CONTRADICTED"},
+    {"id": "no-evidence", "expected": "INSUFFICIENT_EVIDENCE"},
+    {"id": "partial", "expected": "PARTIALLY_SUPPORTED"},
+    {"id": "invalid-provenance", "expected": "UNSUPPORTED"}
+  ]
+}

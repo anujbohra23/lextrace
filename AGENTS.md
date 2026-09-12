@@ -21,7 +21,8 @@ as Case objects; safe rejection reasons belong only in run metadata.
 ## Build, Test, and Development Commands
 
 Use Python 3.12 and an activated virtual environment. Install the package and
-development and retrieval tools with `python -m pip install -e '.[dev,retrieval]'`.
+development, retrieval, and research tools with
+`python -m pip install -e '.[dev,retrieval,research]'`.
 
 - `uvicorn lextrace.api.app:app --reload`: start the local API.
 - `lextrace build-index --corpus data/cases.jsonl`: build the default local index.
@@ -55,8 +56,11 @@ when applicable.
 
 ## Scope & Configuration
 
-Do not add persistence, model services, orchestration, or frontend infrastructure
-without an explicit task. Never commit credentials or local corpora. Ingestion requires
+Do not add persistent workflow storage or frontend infrastructure without an
+explicit task. Keep orchestration separate from retrieval and graph algorithms.
+Every generated legal claim must reference run-local case and passage evidence;
+failed provenance checks override model output. Never commit credentials, private
+research runs, or local corpora. Ingestion requires
 `COURTLISTENER_API_TOKEN`; `.env` loading is not configured. Mock external HTTP
 with HTTPX MockTransport in tests. Never include credentials in error messages.
 

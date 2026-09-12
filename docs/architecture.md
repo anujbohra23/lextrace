@@ -168,3 +168,37 @@ Candidates retain bounded paths from multiple seeds.
 nodes with the filtered local corpus, and uses the unchanged cross-encoder for
 final scoring. Citation edges supply candidates, never ranking scores. Structured
 diagnostics explain graph discovery while passages remain exact retrieval evidence.
+
+## Grounded research orchestration
+
+`research/workflow.py` is a bounded LangGraph state machine over the public
+`LexTraceRetriever`, `CitationGraph`, and `CaseStore` interfaces. Its 13 nodes
+cover issue spotting, planning, retrieval, citation lookup, precedent analysis,
+two evidence-sharing argument perspectives, synthesis, atomic claim extraction,
+verification, one possible revision, final verification, and finalization.
+Search and graph algorithms remain outside the graph.
+
+State carries the request/run ID, bounded issues and tasks, deduplicated evidence,
+relationships, analyses, arguments, memo, claims, verification results, grounding,
+safe errors/warnings, node timings, prompt identities, retrieval trace IDs, and
+revision count. Evidence context preserves canonical metadata and stable passage
+IDs under a deterministic word budget; it never silently summarizes source text.
+
+`research/llm.py` defines a provider-independent structured-generation protocol
+and a thin OpenAI-compatible adapter with explicit model, timeout, deterministic
+temperature, bounded transient retries, safe errors, and token accounting.
+`prompts.py` keeps nine prompt definitions at version `1.0.0` and labels legal
+text as untrusted data. Tests inject deterministic fakes and never call a provider.
+
+Grounding combines evidence-only structured verification with checks for retrieved
+case and passage existence, passage ownership, canonical metadata/source URL, and
+run-local provenance. Failed checks override a model's supported decision. One
+revision can remove or weaken weak claims; any remaining unsupported claims are
+reported in warnings and memo uncertainties. Confidence follows final support
+coverage and is explicitly heuristic rather than statistically calibrated.
+
+Run state is returned in a typed trace and is not persisted in this milestone.
+This keeps private questions, provider output, and evidence out of generated
+databases by default. `research/evaluation.py` reports deterministic grounding,
+workflow, efficiency, and optional labeled-retrieval metrics, with a separate
+interface for future human evaluation.

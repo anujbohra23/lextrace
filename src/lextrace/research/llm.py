@@ -44,13 +44,25 @@ class OpenAICompatibleLLM:
         self.retries = 0
         self.usage = Usage()
         try:
-            from openai import OpenAI
+            from openai import (
+                APIConnectionError,
+                APITimeoutError,
+                InternalServerError,
+                OpenAI,
+                RateLimitError,
+            )
 
             self._client = OpenAI(
                 api_key=api_key,
                 base_url=base_url,
                 timeout=timeout,
                 max_retries=0,
+            )
+            self._transient_errors: tuple[type[Exception], ...] = (
+                APIConnectionError,
+                APITimeoutError,
+                InternalServerError,
+                RateLimitError,
             )
         except Exception:
             raise ResearchError(
@@ -97,8 +109,10 @@ class OpenAICompatibleLLM:
                 raise ResearchError(
                     "LLM returned malformed structured output."
                 ) from None
-            except Exception:
-                if attempt == self.max_retries:
+            except Exception as error:
+                if attempt == self.max_retries or not isinstance(
+                    error, self._transient_errors
+                ):
                     raise ResearchError("Structured LLM generation failed.") from None
                 self.retries += 1
                 time.sleep(min(2**attempt, 2))

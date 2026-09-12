@@ -31,6 +31,7 @@ from lextrace.research.contracts import (
     ResearchTrace,
     RevisionOutput,
     SynthesisOutput,
+    Usage,
     VerificationOutput,
     VerificationResult,
 )
@@ -77,6 +78,7 @@ class ResearchGraphState(TypedDict, total=False):
     warnings: list[str]
     nodes: list[str]
     timings: dict[str, float]
+    node_usage: dict[str, Usage]
     prompts: list[str]
     retrieval_trace_ids: list[str]
     revision_count: int
@@ -163,6 +165,7 @@ class ResearchWorkflow:
     ) -> Callable[[ResearchGraphState], dict[str, object]]:
         def run(state: ResearchGraphState) -> dict[str, object]:
             started = time.perf_counter()
+            usage_before = self.llm.usage.model_copy()
             try:
                 result = function(state)
             except (ResearchError, RetrievalError) as error:
@@ -171,6 +174,23 @@ class ResearchWorkflow:
             result["timings"] = {
                 **state.get("timings", {}),
                 name: time.perf_counter() - started,
+            }
+            usage_after = self.llm.usage
+            result["node_usage"] = {
+                **state.get("node_usage", {}),
+                name: Usage(
+                    calls=usage_after.calls - usage_before.calls,
+                    input_tokens=usage_after.input_tokens - usage_before.input_tokens,
+                    output_tokens=(
+                        usage_after.output_tokens - usage_before.output_tokens
+                    ),
+                    cost=(
+                        usage_after.cost - usage_before.cost
+                        if usage_after.cost is not None
+                        and usage_before.cost is not None
+                        else None
+                    ),
+                ),
             }
             return result
 
@@ -218,6 +238,8 @@ class ResearchWorkflow:
         valid_issues = {issue.issue_id for issue in state["issues"]}
         tasks = [task for task in output.tasks if task.issue_id in valid_issues]
         for task in tasks:
+            if "retrieval_mode" not in task.model_fields_set:
+                task.retrieval_mode = self.config.default_mode
             if task.retrieval_mode == "citation_reranked" and self.graph is None:
                 task.retrieval_mode = "reranked"
         return {"tasks": tasks[: self.config.max_queries], "prompts": state["prompts"]}
@@ -548,6 +570,8 @@ class ResearchWorkflow:
 
     def run(self, request: ResearchRequest) -> ResearchResponse:
         started = time.perf_counter()
+        usage_before = self.llm.usage.model_copy()
+        retries_before = self.llm.retries
         run_id = uuid.uuid4().hex
         state = self._graph.invoke(
             {
@@ -557,6 +581,7 @@ class ResearchWorkflow:
                 "warnings": [],
                 "nodes": [],
                 "timings": {},
+                "node_usage": {},
                 "prompts": [],
                 "retrieval_trace_ids": [],
                 "revision_count": 0,
@@ -580,17 +605,27 @@ class ResearchWorkflow:
             status=status,
             nodes_executed=state.get("nodes", []),
             node_seconds=state.get("timings", {}),
+            node_usage=state.get("node_usage", {}),
             retrieval_trace_ids=state.get("retrieval_trace_ids", []),
             prompts=state.get("prompts", []),
             provider=self.llm.provider,
             model=self.llm.model,
             tool_errors=state.get("errors", []),
-            retry_count=self.llm.retries,
+            retry_count=self.llm.retries - retries_before,
             evidence_count=len(state.get("evidence", [])),
             claims_generated=len(state.get("claims", [])),
             claims_supported=grounding.supported,
             revision_count=state.get("revision_count", 0),
-            usage=self.llm.usage,
+            usage=Usage(
+                calls=self.llm.usage.calls - usage_before.calls,
+                input_tokens=self.llm.usage.input_tokens - usage_before.input_tokens,
+                output_tokens=self.llm.usage.output_tokens - usage_before.output_tokens,
+                cost=(
+                    self.llm.usage.cost - usage_before.cost
+                    if self.llm.usage.cost is not None and usage_before.cost is not None
+                    else None
+                ),
+            ),
             total_seconds=time.perf_counter() - started,
         )
         return ResearchResponse(

@@ -133,6 +133,7 @@ class ResearchTrace(Record):
     status: Literal["completed", "degraded", "failed"]
     nodes_executed: list[str]
     node_seconds: dict[str, float]
+    node_usage: dict[str, Usage]
     retrieval_trace_ids: list[str]
     prompts: list[str]
     provider: str

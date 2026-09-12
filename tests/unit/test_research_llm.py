@@ -29,6 +29,7 @@ def adapter(responses: list[object], *, retries: int = 0) -> OpenAICompatibleLLM
     current.retries = 0
     current.usage = Usage()
     current.max_retries = retries
+    current._transient_errors = (TimeoutError,)
     completions = FakeCompletions(responses)
     current.__dict__["_client"] = SimpleNamespace(
         chat=SimpleNamespace(completions=completions)

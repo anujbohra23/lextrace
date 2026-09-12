@@ -6,13 +6,14 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query
 
 from lextrace.config import APP_TITLE
 from lextrace.domain.case import Case
 from lextrace.graph.contracts import CitationNeighbor, GraphError
+from lextrace.research.contracts import ResearchError, ResearchRequest, ResearchResponse
 from lextrace.retrieval.contracts import RetrievalError, SearchRequest, SearchResponse
 from lextrace.retrieval.engine import LexTraceRetriever
 
@@ -22,6 +23,7 @@ def create_app(
     *,
     index_path: Path | None = None,
     graph_path: Path | None = None,
+    research_workflow: Any | None = None,
 ) -> FastAPI:
     lock = threading.Lock()
     engine = retriever
@@ -31,6 +33,12 @@ def create_app(
         yield
         if engine is not None:
             engine.close()
+        research_engine = getattr(research_workflow, "retriever", None)
+        if (
+            isinstance(research_engine, LexTraceRetriever)
+            and research_engine is not engine
+        ):
+            research_engine.close()
 
     application = FastAPI(title=APP_TITLE, lifespan=lifespan)
 
@@ -66,6 +74,25 @@ def create_app(
         try:
             return get_engine().search_response(request)
         except RetrievalError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+
+    @application.post("/research", response_model=ResearchResponse)
+    def research(request: ResearchRequest) -> ResearchResponse:
+        nonlocal research_workflow
+        try:
+            if research_workflow is None:
+                from lextrace.research.commands import build_workflow
+
+                configured_index = index_path or Path(
+                    os.environ.get("LEXTRACE_INDEX_PATH", "artifacts/indexes/default")
+                )
+                research_workflow = build_workflow(
+                    configured_index,
+                    graph_path,
+                    os.environ.get("LEXTRACE_LLM_MODEL"),
+                )
+            return research_workflow.run(request)
+        except (ResearchError, RetrievalError, GraphError) as error:
             raise HTTPException(status_code=503, detail=str(error)) from None
 
     @application.get("/cases/{case_id}", response_model=Case)
