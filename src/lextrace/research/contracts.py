@@ -123,6 +123,7 @@ class GroundingSummary(Record):
 class Usage(Record):
     calls: int = 0
     input_tokens: int = 0
+    cached_input_tokens: int = 0
     output_tokens: int = 0
     cost: float | None = None
 
@@ -144,6 +145,8 @@ class ResearchTrace(Record):
     claims_generated: int
     claims_supported: int
     revision_count: int
+    cache_hits: int = 0
+    cache_misses: int = 0
     usage: Usage
     total_seconds: float
 

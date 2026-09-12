@@ -36,6 +36,7 @@ from lextrace.research.contracts import (
     VerificationResult,
 )
 from lextrace.research.llm import StructuredLLM
+from lextrace.research.observability import NullObserver, ResearchObserver
 from lextrace.research.prompts import PromptDefinition, PromptId, prompt
 from lextrace.retrieval.contracts import (
     Mode,
@@ -130,12 +131,14 @@ class ResearchWorkflow:
         *,
         graph: CitationGraph | None = None,
         config: ResearchConfig | None = None,
+        observer: ResearchObserver | None = None,
     ) -> None:
         self.retriever = retriever
         self.graph = graph or retriever.graph
         self.case_store = CaseStore(retriever)
         self.llm = llm
         self.config = config or ResearchConfig()
+        self.observer = observer or NullObserver()
         builder = StateGraph(ResearchGraphState)
         nodes = [
             ("issue_spotter", self._issue),
@@ -170,28 +173,42 @@ class ResearchWorkflow:
                 result = function(state)
             except (ResearchError, RetrievalError) as error:
                 result = {"errors": [*state.get("errors", []), str(error)]}
+                self.observer.emit(
+                    "node.failure", {"run_id": state["run_id"], "node": name}
+                )
+            elapsed = time.perf_counter() - started
             result["nodes"] = [*state.get("nodes", []), name]
             result["timings"] = {
                 **state.get("timings", {}),
-                name: time.perf_counter() - started,
+                name: elapsed,
             }
             usage_after = self.llm.usage
+            node_usage = Usage(
+                calls=usage_after.calls - usage_before.calls,
+                input_tokens=usage_after.input_tokens - usage_before.input_tokens,
+                cached_input_tokens=(
+                    usage_after.cached_input_tokens - usage_before.cached_input_tokens
+                ),
+                output_tokens=usage_after.output_tokens - usage_before.output_tokens,
+                cost=(
+                    usage_after.cost - usage_before.cost
+                    if usage_after.cost is not None and usage_before.cost is not None
+                    else None
+                ),
+            )
             result["node_usage"] = {
                 **state.get("node_usage", {}),
-                name: Usage(
-                    calls=usage_after.calls - usage_before.calls,
-                    input_tokens=usage_after.input_tokens - usage_before.input_tokens,
-                    output_tokens=(
-                        usage_after.output_tokens - usage_before.output_tokens
-                    ),
-                    cost=(
-                        usage_after.cost - usage_before.cost
-                        if usage_after.cost is not None
-                        and usage_before.cost is not None
-                        else None
-                    ),
-                ),
+                name: node_usage,
             }
+            self.observer.emit(
+                "node.completed",
+                {
+                    "run_id": state["run_id"],
+                    "node": name,
+                    "seconds": elapsed,
+                    "llm_calls": node_usage.calls,
+                },
+            )
             return result
 
         return run
@@ -568,11 +585,13 @@ class ResearchWorkflow:
             ),
         }
 
-    def run(self, request: ResearchRequest) -> ResearchResponse:
+    def run(
+        self, request: ResearchRequest, *, run_id: str | None = None
+    ) -> ResearchResponse:
         started = time.perf_counter()
         usage_before = self.llm.usage.model_copy()
         retries_before = self.llm.retries
-        run_id = uuid.uuid4().hex
+        run_id = run_id or uuid.uuid4().hex
         state = self._graph.invoke(
             {
                 "request": request,
@@ -616,9 +635,15 @@ class ResearchWorkflow:
             claims_generated=len(state.get("claims", [])),
             claims_supported=grounding.supported,
             revision_count=state.get("revision_count", 0),
+            cache_hits=getattr(self.llm, "hits", 0),
+            cache_misses=getattr(self.llm, "misses", 0),
             usage=Usage(
                 calls=self.llm.usage.calls - usage_before.calls,
                 input_tokens=self.llm.usage.input_tokens - usage_before.input_tokens,
+                cached_input_tokens=(
+                    self.llm.usage.cached_input_tokens
+                    - usage_before.cached_input_tokens
+                ),
                 output_tokens=self.llm.usage.output_tokens - usage_before.output_tokens,
                 cost=(
                     self.llm.usage.cost - usage_before.cost
@@ -627,6 +652,16 @@ class ResearchWorkflow:
                 ),
             ),
             total_seconds=time.perf_counter() - started,
+        )
+        self.observer.emit(
+            "workflow.completed",
+            {
+                "run_id": run_id,
+                "status": status,
+                "evidence_count": trace.evidence_count,
+                "claims_supported": trace.claims_supported,
+                "seconds": trace.total_seconds,
+            },
         )
         return ResearchResponse(
             run_id=run_id,

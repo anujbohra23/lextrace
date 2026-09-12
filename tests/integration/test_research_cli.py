@@ -2,6 +2,7 @@
 
 import json
 from argparse import ArgumentParser
+from pathlib import Path
 
 import pytest
 
@@ -61,3 +62,16 @@ def test_missing_llm_configuration_is_safe(
     result = capsys.readouterr()
     assert not result.out
     assert result.err == "Error: LLM model is not configured.\n"
+
+
+def test_evaluate_system_command(
+    tmp_path: Path,
+    empty_research_response: ResearchResponse,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    golden = tmp_path / "golden.json"
+    golden.write_text(json.dumps([empty_research_response.model_dump(mode="json")]))
+    main(["evaluate-system", "--golden", str(golden)])
+    metrics = json.loads(capsys.readouterr().out)
+    assert metrics["runs"] == 1
+    assert metrics["completion_rate"] == 1

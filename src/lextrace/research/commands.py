@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
-import os
+import json
 from datetime import date
 from pathlib import Path
 from typing import Protocol
 
+from lextrace.config import AppSettings, ConfigurationError, openai_api_key
 from lextrace.graph.contracts import GraphError
 from lextrace.research.contracts import ResearchError, ResearchRequest, ResearchResponse
+from lextrace.research.evaluation import evaluate_runs
 from lextrace.research.llm import OpenAICompatibleLLM
 from lextrace.research.workflow import ResearchWorkflow
 from lextrace.retrieval.contracts import RetrievalError
@@ -33,22 +35,28 @@ def add_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -
     )
     parser.add_argument("--model", help="Provider model ID; or set LEXTRACE_LLM_MODEL")
     parser.add_argument("--json", action="store_true")
+    evaluation = commands.add_parser(
+        "evaluate-system", help="Evaluate saved research responses offline"
+    )
+    evaluation.add_argument("--golden", type=Path, required=True)
 
 
 def build_workflow(
-    index_path: Path, graph_path: Path | None, model_name: str | None
+    index_path: Path,
+    graph_path: Path | None,
+    model_name: str | None,
+    *,
+    settings: AppSettings | None = None,
 ) -> ResearchWorkflow:
-    model = model_name or os.environ.get("LEXTRACE_LLM_MODEL")
-    credential = os.environ.get("OPENAI_API_KEY")
+    configured = settings or AppSettings.from_environment()
+    model = model_name or configured.llm_model
     if not model:
         raise ResearchError("LLM model is not configured.")
-    if not credential:
-        raise ResearchError("LLM API credential is missing.")
     retriever = LexTraceRetriever.from_index(index_path, graph_path=graph_path)
     llm = OpenAICompatibleLLM(
         model,
-        api_key=credential,
-        base_url=os.environ.get("OPENAI_BASE_URL"),
+        api_key=openai_api_key(),
+        base_url=configured.llm_base_url,
     )
     return ResearchWorkflow(retriever, llm)
 
@@ -106,6 +114,16 @@ def run_command(
     *,
     workflow: ResearchRunner | None = None,
 ) -> bool:
+    if args.command == "evaluate-system":
+        try:
+            raw = json.loads(args.golden.read_text())
+            if not isinstance(raw, list):
+                raise ValueError
+            responses = [ResearchResponse.model_validate(item) for item in raw]
+        except (OSError, ValueError):
+            parser.exit(1, "Error: Golden research responses are invalid.\n")
+        print(evaluate_runs(responses).model_dump_json(indent=2))
+        return True
     if args.command != "research":
         return False
     current = workflow
@@ -119,7 +137,7 @@ def run_command(
                 max_cases=args.max_cases,
             )
         )
-    except (ResearchError, RetrievalError, GraphError) as error:
+    except (ResearchError, RetrievalError, GraphError, ConfigurationError) as error:
         parser.exit(1, f"Error: {error}\n")
     finally:
         if workflow is None and isinstance(current, ResearchWorkflow):

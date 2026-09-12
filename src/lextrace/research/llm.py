@@ -102,6 +102,10 @@ class OpenAICompatibleLLM:
                 if usage is not None:
                     self.usage.input_tokens += usage.prompt_tokens
                     self.usage.output_tokens += usage.completion_tokens
+                    details = getattr(usage, "prompt_tokens_details", None)
+                    self.usage.cached_input_tokens += (
+                        getattr(details, "cached_tokens", 0) or 0
+                    )
                 return schema.model_validate(parsed)
             except ResearchError:
                 raise
