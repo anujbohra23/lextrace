@@ -32,6 +32,9 @@ development, retrieval, and research tools with
 - `ruff format --check .`: verify formatting; use `ruff format .` to apply it.
 - `mypy`: run strict typing checks on source and tests.
 - `pre-commit install`: enable hooks; `pre-commit run --all-files` checks tracked files.
+- `cd frontend && npm test`: run UI tests; also run `npm run lint`,
+  `npm run typecheck`, and `npm run build`.
+- `docker compose up --build`: start the mounted-data backend and frontend.
 
 ## Coding Style & Naming Conventions
 

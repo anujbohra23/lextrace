@@ -197,8 +197,36 @@ revision can remove or weaken weak claims; any remaining unsupported claims are
 reported in warnings and memo uncertainties. Confidence follows final support
 coverage and is explicitly heuristic rather than statistically calibrated.
 
-Run state is returned in a typed trace and is not persisted in this milestone.
-This keeps private questions, provider output, and evidence out of generated
-databases by default. `research/evaluation.py` reports deterministic grounding,
-workflow, efficiency, and optional labeled-retrieval metrics, with a separate
-interface for future human evaluation.
+Run state is returned in a typed trace. `research/evaluation.py` reports
+deterministic grounding, workflow, efficiency, and optional labeled-retrieval
+metrics, with a separate interface for future human evaluation.
+
+## Engineering v1 runtime
+
+The production runtime persists runs, node summaries, evidence references,
+verification outcomes, safe traces, and optional final content in SQLite. A
+bounded in-process executor owns workflow concurrency and supports explicit retry
+of failed/degraded stored requests. This is a local queue boundary that can be
+replaced later; it is not a distributed worker system.
+
+The structured-task cache hashes workflow, prompt, provider/model, schema, and
+normalized context. SQLite transactions make concurrent writes atomic. Corrupt
+entries are deleted and recomputed. Final answers are never keyed only by question
+text. Structured events contain IDs, counts, versions, status, and latency, but no
+questions, prompts, evidence text, credentials, or hidden reasoning.
+
+```mermaid
+flowchart TB
+    CL[CourtListener] --> C[Normalized corpus]
+    C --> R[BM25 + Dense + RRF]
+    R --> G[Citation expansion]
+    G --> X[Cross-encoder + evidence passages]
+    X --> L[LangGraph research workflow]
+    L --> V[Claim verification + bounded revision]
+    V --> M[Grounded memo]
+    M --> W[Next.js research workspace]
+    P[(SQLite runtime)] --- L
+    K[(Versioned cache)] --- L
+    T[Safe traces] --- L
+    E[Evaluation] --- L
+```

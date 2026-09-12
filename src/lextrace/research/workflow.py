@@ -591,6 +591,8 @@ class ResearchWorkflow:
         started = time.perf_counter()
         usage_before = self.llm.usage.model_copy()
         retries_before = self.llm.retries
+        cache_hits_before = getattr(self.llm, "hits", 0)
+        cache_misses_before = getattr(self.llm, "misses", 0)
         run_id = run_id or uuid.uuid4().hex
         state = self._graph.invoke(
             {
@@ -635,8 +637,8 @@ class ResearchWorkflow:
             claims_generated=len(state.get("claims", [])),
             claims_supported=grounding.supported,
             revision_count=state.get("revision_count", 0),
-            cache_hits=getattr(self.llm, "hits", 0),
-            cache_misses=getattr(self.llm, "misses", 0),
+            cache_hits=getattr(self.llm, "hits", 0) - cache_hits_before,
+            cache_misses=getattr(self.llm, "misses", 0) - cache_misses_before,
             usage=Usage(
                 calls=self.llm.usage.calls - usage_before.calls,
                 input_tokens=self.llm.usage.input_tokens - usage_before.input_tokens,

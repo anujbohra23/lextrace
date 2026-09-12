@@ -1,8 +1,18 @@
 # LexTrace
 
-Research foundations for an authority-aware legal precedent retrieval and
-reasoning system for U.S. case law. LexTrace fetches individual CourtListener decision clusters and builds small
-local JSONL corpora, preserving separate opinions. No database is used.
+**Evidence-grounded agentic legal research over U.S. case law.**
+
+LexTrace turns a legal question into a bounded research plan, retrieves exact
+passages from real judicial decisions, inspects citation relationships, drafts
+competing analyses, and verifies every substantive claim against run-local
+evidence. It exposes the complete safe trace through a CLI, FastAPI, and a focused
+research workspace rather than a generic chat interface.
+
+The system combines CourtListener ingestion, BM25 and dense retrieval, reciprocal
+rank fusion, citation expansion, cross-encoder reranking, LangGraph orchestration,
+claim-level verification, SQLite runtime persistence, version-safe structured
+caching, and a Next.js frontend. It does not claim comprehensive legal relevance
+or replace professional legal advice.
 
 ## Setup
 
@@ -28,6 +38,19 @@ lextrace --help
 ```
 
 The endpoint returns `{"status":"ok"}`.
+
+For the complete demo, first build or supply the ignored local index and graph,
+then start both services:
+
+```sh
+docker compose up --build
+# Research workspace: http://localhost:3000
+# Backend health:     http://localhost:8000/health
+```
+
+Images contain no corpus, index, graph, model cache, credential, or runtime
+database. Compose mounts `artifacts/` read-only and stores runtime/cache data in
+named volumes. See [Engineering v1 operations](docs/engineering-v1.md).
 
 ## Grounded legal research workflow
 
