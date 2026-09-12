@@ -1,0 +1,14 @@
+.git
+.venv
+.env*
+!/.env.example
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+frontend/node_modules
+frontend/.next
+artifacts/**
+!artifacts/.gitkeep
+data/**
+!data/.gitkeep
