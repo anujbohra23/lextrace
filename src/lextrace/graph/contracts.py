@@ -59,6 +59,7 @@ class CitationNeighbor(Record):
     edge: CitationEdge
     direction: Literal["outgoing", "incoming"]
     hop: Annotated[int, Field(strict=True, gt=0)] = 1
+    seed_case_id: GraphId | None = None
 
 
 class ExpansionResult(Record):

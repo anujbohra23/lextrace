@@ -182,14 +182,14 @@ class CitationGraph:
             )
         seeds = list(dict.fromkeys(seed_case_ids))
         visited = set(seeds)
-        frontier = seeds
+        frontier = [(seed, seed) for seed in seeds]
         results: list[CitationNeighbor] = []
         duplicates = 0
         for hop in range(1, hops + 1):
-            following: list[str] = []
-            for seed in frontier:
+            following: list[tuple[str, str]] = []
+            for current, origin in frontier:
                 for neighbor in self.neighbors(
-                    seed,
+                    current,
                     direction=direction,
                     limit=max_nodes,
                     as_of_date=as_of_date,
@@ -198,8 +198,10 @@ class CitationGraph:
                         duplicates += 1
                         continue
                     visited.add(neighbor.node.case_id)
-                    following.append(neighbor.node.case_id)
-                    results.append(neighbor.model_copy(update={"hop": hop}))
+                    following.append((neighbor.node.case_id, origin))
+                    results.append(
+                        neighbor.model_copy(update={"hop": hop, "seed_case_id": origin})
+                    )
                     if len(results) >= max_nodes:
                         return ExpansionResult(
                             seed_case_ids=seeds,
@@ -207,7 +209,7 @@ class CitationGraph:
                             discovered_count=len(results),
                             deduplicated_count=duplicates,
                         )
-            frontier = sorted(following, key=int)
+            frontier = sorted(following, key=lambda item: (int(item[0]), int(item[1])))
         return ExpansionResult(
             seed_case_ids=seeds,
             neighbors=results,

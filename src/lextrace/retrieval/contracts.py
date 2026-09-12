@@ -12,7 +12,7 @@ from pydantic import (
     model_validator,
 )
 
-Mode = Literal["bm25", "dense", "hybrid", "reranked"]
+Mode = Literal["bm25", "dense", "hybrid", "reranked", "citation_reranked"]
 Positive = Annotated[int, Field(strict=True, gt=0)]
 Finite = Annotated[float, Field(allow_inf_nan=False)]
 Nonempty = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -61,6 +61,19 @@ class Diagnostics(Record):
     dense_rank: Positive | None = None
     hybrid_score: Finite | None = None
     reranker_score: Finite | None = None
+    discovered_via_citation: bool = False
+    citation_provenance: list["CitationProvenance"] = Field(default_factory=list)
+
+
+class CitationProvenance(Record):
+    seed_case_id: str
+    candidate_case_id: str
+    direction: Literal["outgoing", "incoming"]
+    hop: Positive
+    citing_case_id: str
+    cited_case_id: str
+    supporting_opinion_edge_count: Positive
+    provenance_ids: list[str]
 
 
 class RetrievalResult(Record):
@@ -87,6 +100,7 @@ class RetrievalTrace(Record):
     stage_seconds: dict[str, float] = Field(default_factory=dict)
     embedding_model: str | None = None
     reranker_model: str | None = None
+    graph_id: str | None = None
 
 
 class SearchResponse(Record):

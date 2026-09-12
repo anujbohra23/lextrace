@@ -53,12 +53,23 @@ class HybridSettings(Record):
     candidate_depth: Positive = 50
 
 
+class GraphSettings(Record):
+    enabled: bool = True
+    seed_count: Positive = 30
+    direction: Literal["outgoing", "incoming", "both"] = "outgoing"
+    hops: Literal[1, 2] = 1
+    max_expanded_candidates: Annotated[int, Field(strict=True, ge=1, le=1000)] = 100
+    provenance_limit: Annotated[int, Field(strict=True, ge=1, le=10)] = 3
+    as_of_from_filed_before: bool = True
+
+
 class EngineConfig(Record):
     format_version: Literal[1] = 1
     default_mode: Mode = "reranked"
     bm25: LexicalSettings = Field(default_factory=LexicalSettings)
     dense: DenseSettings = Field(default_factory=DenseSettings)
     hybrid: HybridSettings = Field(default_factory=HybridSettings)
+    graph: GraphSettings = Field(default_factory=GraphSettings)
     reranker: RerankerSettings = Field(default_factory=RerankerSettings)
     passages: PassageSettings = Field(default_factory=PassageSettings)
     preprocessing: Literal["all-opinions-stored-order-v1"] = (

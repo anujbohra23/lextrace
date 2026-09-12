@@ -8,8 +8,11 @@ import uuid
 from pathlib import Path
 
 from lextrace.evaluation.benchmark import BenchmarkError
+from lextrace.graph.contracts import GraphError
+from lextrace.graph.store import CitationGraph
 from lextrace.retrieval.bm25 import BM25, BM25Config
 from lextrace.retrieval.contracts import (
+    CitationProvenance,
     Diagnostics,
     Mode,
     Passage,
@@ -47,6 +50,7 @@ class LexTraceRetriever:
         vectors: Vector | None = None,
         encoder: Encoder | None = None,
         scorer: PairScorer | None = None,
+        graph: CitationGraph | None = None,
     ) -> None:
         self.corpus = corpus
         self.config = config or EngineConfig()
@@ -64,6 +68,7 @@ class LexTraceRetriever:
             raise RetrievalError("Dense rows do not align with the corpus.")
         self.encoder = encoder or SentenceEncoder(self.config.dense)
         self.scorer = scorer or CrossScorer(self.config.reranker)
+        self.graph = graph
         self._lock = threading.RLock()
 
     @classmethod
@@ -73,9 +78,11 @@ class LexTraceRetriever:
         *,
         corpus_path: Path | None = None,
         config: EngineConfig | None = None,
+        graph_path: Path | None = None,
     ) -> "LexTraceRetriever":
         index = LocalIndex(path, corpus_path=corpus_path, config=config)
-        return cls(index.corpus, index.config, vectors=index.vectors)
+        graph = CitationGraph(graph_path) if graph_path is not None else None
+        return cls(index.corpus, index.config, vectors=index.vectors, graph=graph)
 
     def close(self) -> None:
         with self._lock:
@@ -83,6 +90,9 @@ class LexTraceRetriever:
                 self.encoder.close()
             if isinstance(self.scorer, CrossScorer):
                 self.scorer.close()
+            if self.graph is not None:
+                self.graph.close()
+                self.graph = None
 
     def search(
         self, query: str, top_k: int = 10, filters: SearchFilters | None = None
@@ -117,14 +127,23 @@ class LexTraceRetriever:
             },
             stage_seconds={
                 key: 0.0
-                for key in ("bm25", "dense", "fusion", "reranker", "passages", "total")
+                for key in (
+                    "bm25",
+                    "dense",
+                    "fusion",
+                    "graph",
+                    "reranker",
+                    "passages",
+                    "total",
+                )
             },
             embedding_model=None
             if request.mode == "bm25"
             else config.dense.model + "@" + config.dense.revision,
             reranker_model=config.reranker.model + "@" + config.reranker.revision
-            if request.mode == "reranked"
+            if request.mode in {"reranked", "citation_reranked"}
             else None,
+            graph_id=self.graph.metadata.graph_id if self.graph is not None else None,
         )
         diagnostics: dict[str, Diagnostics] = {}
         lexical: list[tuple[str, float]] = []
@@ -178,7 +197,7 @@ class LexTraceRetriever:
             trace.stage_seconds["dense"] = time.perf_counter() - before
             trace.candidate_counts["dense"] = len(dense)
         ranked = lexical if request.mode == "bm25" else dense
-        if request.mode in {"hybrid", "reranked"}:
+        if request.mode in {"hybrid", "reranked", "citation_reranked"}:
             before = time.perf_counter()
             ranked = rrf(
                 [i for i, _ in lexical],
@@ -189,8 +208,71 @@ class LexTraceRetriever:
                 diagnostics[identifier].hybrid_score = score
             trace.stage_seconds["fusion"] = time.perf_counter() - before
             trace.candidate_counts["hybrid"] = len(ranked)
+        if request.mode == "citation_reranked":
+            if not config.graph.enabled or self.graph is None:
+                raise RetrievalError(
+                    "Citation reranking requires a configured citation graph."
+                )
+            before = time.perf_counter()
+            seeds = [identifier for identifier, _ in ranked[: config.graph.seed_count]]
+            try:
+                expansion = self.graph.expand(
+                    seeds,
+                    hops=config.graph.hops,
+                    direction=config.graph.direction,
+                    max_nodes=config.graph.max_expanded_candidates,
+                    as_of_date=request.filters.filed_before
+                    if request.filters and config.graph.as_of_from_filed_before
+                    else None,
+                )
+            except GraphError:
+                raise RetrievalError("Citation graph expansion failed.") from None
+            combined = list(seeds)
+            for neighbor in expansion.neighbors:
+                identifier = neighbor.node.case_id
+                if identifier not in eligible:
+                    continue
+                if identifier not in seeds:
+                    diagnostic = diagnostics.setdefault(identifier, Diagnostics())
+                    diagnostic.discovered_via_citation = True
+                    if (
+                        len(diagnostic.citation_provenance)
+                        < config.graph.provenance_limit
+                    ):
+                        diagnostic.citation_provenance.append(
+                            CitationProvenance(
+                                seed_case_id=neighbor.seed_case_id or identifier,
+                                candidate_case_id=identifier,
+                                direction=neighbor.direction,
+                                hop=neighbor.hop,
+                                citing_case_id=neighbor.edge.citing_case_id,
+                                cited_case_id=neighbor.edge.cited_case_id,
+                                supporting_opinion_edge_count=(
+                                    neighbor.edge.supporting_opinion_edge_count
+                                ),
+                                provenance_ids=[
+                                    support.provenance_id
+                                    for support in neighbor.edge.supports
+                                ],
+                            )
+                        )
+                if identifier not in combined:
+                    combined.append(identifier)
+                if len(combined) >= config.graph.max_expanded_candidates:
+                    break
+            score_by_id = dict(ranked)
+            ranked = [
+                (identifier, score_by_id.get(identifier, 0.0))
+                for identifier in combined
+            ]
+            trace.stage_seconds["graph"] = time.perf_counter() - before
+            trace.candidate_counts["graph_discovered"] = expansion.discovered_count
+            trace.candidate_counts["graph_local"] = len(combined) - len(seeds)
+            trace.candidate_counts["graph_deduplicated"] = expansion.deduplicated_count
         candidates = (
-            ranked[: config.reranker.candidate_depth]
+            ranked[: config.graph.max_expanded_candidates]
+            if request.mode == "citation_reranked"
+            else ranked[: config.reranker.candidate_depth]
             if request.mode == "reranked"
             else ranked[: request.top_k]
         )
@@ -205,7 +287,7 @@ class LexTraceRetriever:
             for identifier, _ in candidates
         }
         trace.stage_seconds["passages"] = time.perf_counter() - before
-        if request.mode == "reranked" and candidates:
+        if request.mode in {"reranked", "citation_reranked"} and candidates:
             before = time.perf_counter()
             pairs = [
                 (request.query, p.text)

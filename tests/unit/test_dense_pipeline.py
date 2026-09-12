@@ -8,7 +8,16 @@ import pytest
 
 from lextrace.corpus import serialize_cases
 from lextrace.domain.case import Case
-from lextrace.evaluation.benchmark import BenchmarkConfig, BenchmarkInputs
+from lextrace.evaluation.benchmark import (
+    BenchmarkConfig,
+    BenchmarkInputs,
+    CitationEvidence,
+    OpinionMapping,
+    digest,
+)
+from lextrace.graph.build import build_graph
+from lextrace.graph.contracts import GraphEvidenceBundle
+from lextrace.graph.store import CitationGraph
 from lextrace.retrieval.contracts import RetrievalError, SearchFilters, SearchRequest
 from lextrace.retrieval.documents import Corpus
 from lextrace.retrieval.engine import LexTraceRetriever
@@ -190,3 +199,85 @@ def test_failed_build_is_atomic(
     with pytest.raises(RetrievalError):
         build_index(source, output, encoder=Broken())
     assert not output.exists()
+
+
+def test_citation_expansion_adds_only_local_candidates(
+    local_cases: list[Case], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    corpus_path = Path("cases.jsonl")
+    corpus_path.write_text(serialize_cases(local_cases))
+    citing_opinion = local_cases[0].opinions[0].source_id
+    bundle = GraphEvidenceBundle(
+        citations=[
+            CitationEvidence(
+                citing_opinion_id=citing_opinion,
+                cited_opinion_ids=["700", "701"],
+                relation_source="opinions-cited",
+                payload_sha256=digest("evidence"),
+                depths={"700": 2, "701": 1},
+                complete=True,
+            )
+        ],
+        opinion_mappings=[
+            OpinionMapping(
+                opinion_id="700",
+                case_id=local_cases[2].source_id,
+                date_filed=local_cases[2].date_filed,
+                court=local_cases[2].court_id,
+                case_name=local_cases[2].name,
+                payload_sha256=digest("700"),
+            ),
+            OpinionMapping(
+                opinion_id="701",
+                case_id="999",
+                date_filed=local_cases[2].date_filed,
+                court="ca2",
+                case_name="Unavailable locally",
+                payload_sha256=digest("701"),
+            ),
+        ],
+        source_provenance="offline-test",
+    )
+    source = Path("citations.json")
+    source.write_text(bundle.model_dump_json())
+    path = Path("artifacts/graphs/test")
+    build_graph(corpus_path, source, path)
+    corpus = Corpus(local_cases)
+    encoder = FakeEncoder()
+    config = EngineConfig()
+    config.graph.seed_count = 1
+    config.graph.max_expanded_candidates = 5
+    engine = LexTraceRetriever(
+        corpus,
+        config,
+        vectors=encoder.encode([corpus.text(i) for i in corpus.ids]),
+        encoder=encoder,
+        scorer=FakeScorer(),
+        graph=CitationGraph(path),
+    )
+    response = engine.search_response(
+        SearchRequest(query="salary", top_k=3, mode="citation_reranked")
+    )
+    assert response.results[0].case_id == local_cases[2].source_id
+    assert response.results[0].diagnostics.discovered_via_citation
+    provenance = response.results[0].diagnostics.citation_provenance[0]
+    assert provenance.seed_case_id == local_cases[0].source_id
+    assert provenance.candidate_case_id == local_cases[2].source_id
+    assert "999" not in {result.case_id for result in response.results}
+    assert response.trace.candidate_counts["graph_local"] == 1
+    assert response.trace.graph_id is not None
+    engine.close()
+
+
+def test_citation_mode_requires_graph(local_cases: list[Case]) -> None:
+    corpus = Corpus(local_cases)
+    encoder = FakeEncoder()
+    engine = LexTraceRetriever(
+        corpus,
+        vectors=encoder.encode([corpus.text(i) for i in corpus.ids]),
+        encoder=encoder,
+        scorer=FakeScorer(),
+    )
+    with pytest.raises(RetrievalError, match="citation graph"):
+        engine.search_response(SearchRequest(query="salary", mode="citation_reranked"))
