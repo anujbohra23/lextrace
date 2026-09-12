@@ -1,5 +1,6 @@
 """Offline case-level citation normalization and SQLite traversal tests."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -53,7 +54,7 @@ def sample(cases: list[Case]) -> tuple[list[Case], GraphEvidenceBundle]:
             evidence(first.opinions[0].source_id, ["700", "701", "702"]),
             evidence("999", ["700"]),
             evidence(second.opinions[0].source_id, ["703"]),
-            evidence(third.opinions[0].source_id, ["704"]),
+            evidence(third.opinions[0].source_id, ["704", "700"]),
         ],
         opinion_mappings=[
             mapping("700", second),
@@ -80,8 +81,8 @@ def test_opinion_mapping_aggregation_and_unresolved(benchmark_sample: Sample) ->
     }
     assert next(e for e in edges if e.self_edge).citing_case_id == local[0].source_id
     assert counts == {
-        "source_edges": 6,
-        "mapped_source_edges": 5,
+        "source_edges": 7,
+        "mapped_source_edges": 6,
         "collapsed_duplicates": 1,
         "unresolved_mappings": 1,
     }
@@ -98,7 +99,7 @@ def test_store_directions_cycles_bounds_and_dates(
     corpus.write_text(serialize_cases(local))
     source.write_text(bundle.model_dump_json())
     metadata = build_graph(corpus, source, Path("artifacts/graphs/test"))
-    assert metadata.statistics.edge_count == 4
+    assert metadata.statistics.edge_count == 5
     graph = CitationGraph(Path("artifacts/graphs/test"))
     assert [n.node.case_id for n in graph.get_outgoing(local[0].source_id)] == [
         local[0].source_id,
@@ -111,6 +112,12 @@ def test_store_directions_cycles_bounds_and_dates(
     assert len(graph.neighbors(local[0].source_id, direction="both")) == 4
     expanded = graph.expand([local[0].source_id], direction="both", hops=2, max_nodes=2)
     assert len(expanded.neighbors) <= 2 and expanded.deduplicated_count >= 1
+    multiple = graph.expand(
+        [local[0].source_id, local[2].source_id],
+        direction="outgoing",
+        max_nodes=3,
+    )
+    assert len(multiple.provenance[local[1].source_id]) == 2
     cutoff = local[1].date_filed
     assert cutoff is not None
     assert all(
@@ -145,4 +152,9 @@ def test_reuse_mismatch_and_corruption(
     with (output / "graph.sqlite3").open("ab") as handle:
         handle.write(b"broken")
     with pytest.raises(GraphError, match="checksum"):
+        CitationGraph(output)
+    metadata = json.loads((output / "metadata.json").read_text())
+    metadata["format_version"] = 2
+    (output / "metadata.json").write_text(json.dumps(metadata))
+    with pytest.raises(GraphError, match="valid citation graph"):
         CitationGraph(output)

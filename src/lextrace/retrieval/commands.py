@@ -33,7 +33,11 @@ def add_commands(commands: argparse._SubParsersAction[argparse.ArgumentParser]) 
     search.add_argument(
         "--config", type=Path, help="Runtime settings; representation must match index"
     )
-    search.add_argument("--mode", choices=["bm25", "dense", "hybrid", "reranked"])
+    search.add_argument(
+        "--mode",
+        choices=["bm25", "dense", "hybrid", "reranked", "citation_reranked"],
+    )
+    search.add_argument("--graph", type=Path)
     search.add_argument("--top-k", type=int, default=10)
     search.add_argument("--court", action="append", default=[])
     search.add_argument("--filed-after")
@@ -48,7 +52,7 @@ def add_commands(commands: argparse._SubParsersAction[argparse.ArgumentParser]) 
     evaluate.add_argument(
         "--modes",
         nargs="+",
-        choices=["bm25", "dense", "hybrid", "reranked"],
+        choices=["bm25", "dense", "hybrid", "reranked", "citation_reranked"],
         default=["bm25", "dense", "hybrid", "reranked"],
     )
 
@@ -99,6 +103,7 @@ def run_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> bo
         args.index,
         corpus_path=args.corpus,
         config=read_config(args.config) if args.config else None,
+        graph_path=args.graph,
     )
     if args.mode is None:
         request.mode = engine.config.default_mode

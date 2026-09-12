@@ -235,24 +235,23 @@ class LexTraceRetriever:
                 if identifier not in seeds:
                     diagnostic = diagnostics.setdefault(identifier, Diagnostics())
                     diagnostic.discovered_via_citation = True
-                    if (
-                        len(diagnostic.citation_provenance)
-                        < config.graph.provenance_limit
-                    ):
+                    for path in expansion.provenance[identifier][
+                        : config.graph.provenance_limit
+                    ]:
                         diagnostic.citation_provenance.append(
                             CitationProvenance(
-                                seed_case_id=neighbor.seed_case_id or identifier,
+                                seed_case_id=path.seed_case_id or identifier,
                                 candidate_case_id=identifier,
-                                direction=neighbor.direction,
-                                hop=neighbor.hop,
-                                citing_case_id=neighbor.edge.citing_case_id,
-                                cited_case_id=neighbor.edge.cited_case_id,
+                                direction=path.direction,
+                                hop=path.hop,
+                                citing_case_id=path.edge.citing_case_id,
+                                cited_case_id=path.edge.cited_case_id,
                                 supporting_opinion_edge_count=(
-                                    neighbor.edge.supporting_opinion_edge_count
+                                    path.edge.supporting_opinion_edge_count
                                 ),
                                 provenance_ids=[
                                     support.provenance_id
-                                    for support in neighbor.edge.supports
+                                    for support in path.edge.supports
                                 ],
                             )
                         )

@@ -77,3 +77,13 @@ tie breaks. Include every representation-affecting model, window, passage, and
 preprocessing setting in index identity. Tests inject fake encoders/rerankers and
 must not download models or access the network. Treat the 14-case corpus as an
 engineering smoke fixture, never as retrieval-quality evidence.
+
+## Citation Graph Conventions
+
+Keep reporter citations separate from directed `CitationEdge` records. Resolve
+opinion IDs to cluster IDs explicitly, retain supporting opinion provenance, and
+report unresolved mappings. Store generated graphs under ignored `artifacts/`.
+Traversal must be deterministic, indexed, cycle safe, temporally bounded when
+requested, and capped. `citation_reranked` may discover candidates through the
+graph, but only the existing cross-encoder assigns final relevance. Do not add
+authority weights, treatment inference, graph-ranking research, or GraphRAG claims.

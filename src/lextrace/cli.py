@@ -16,6 +16,9 @@ from lextrace.evaluation.benchmark import BenchmarkError
 from lextrace.evaluation.benchmark_build import build_benchmark, validate_benchmark
 from lextrace.evaluation.corpus_quality import inspect_corpus
 from lextrace.evaluation.retrieval_run import run_bm25
+from lextrace.graph.commands import add_commands as add_graph_commands
+from lextrace.graph.commands import run_command as run_graph_command
+from lextrace.graph.contracts import GraphError
 from lextrace.ingestion.benchmark_job import acquire_benchmark
 from lextrace.ingestion.corpus import ingest_corpus
 from lextrace.ingestion.courtlistener import IngestionError, fetch_case
@@ -95,12 +98,13 @@ def main(
     baseline.add_argument("bundle", type=Path)
     baseline.add_argument("--output", type=Path, required=True)
     add_commands(commands)
+    add_graph_commands(commands)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
         return
     try:
-        if run_command(args, parser):
+        if run_command(args, parser) or run_graph_command(args, parser):
             return
         if args.command == "acquire-benchmark":
             result = acquire_benchmark(
@@ -178,6 +182,7 @@ def main(
         CorpusError,
         BenchmarkError,
         RetrievalError,
+        GraphError,
     ) as error:
         parser.exit(1, f"Error: {error}\n")
     except KeyboardInterrupt:

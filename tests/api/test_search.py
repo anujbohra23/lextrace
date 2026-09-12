@@ -74,7 +74,7 @@ def test_lazy_index_is_loaded_once(
     engine = LexTraceRetriever(Corpus(cases[:2]))
     calls = 0
 
-    def load(path: Path) -> LexTraceRetriever:
+    def load(path: Path, **kwargs: object) -> LexTraceRetriever:
         nonlocal calls
         calls += 1
         return engine

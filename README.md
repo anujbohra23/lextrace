@@ -254,3 +254,68 @@ and several illustrative queries have no clearly responsive case. Exact NumPy
 search is intentionally simple and scales linearly; BM25 text and corpus records
 also remain in memory. The cross-encoder sees only selected 128-word passages,
 and lexical passage selection can miss semantically relevant evidence.
+
+## Citation graph infrastructure v1
+
+LexTrace normalizes cached CourtListener opinion relationships into directed
+case-to-case edges and persists them in indexed SQLite:
+
+```sh
+lextrace build-citation-graph --corpus data/cases.jsonl \
+  --citation-source data/citation-evidence.json \
+  --output artifacts/graphs/default
+lextrace graph-info artifacts/graphs/default
+lextrace citations 38 --graph artifacts/graphs/default --direction outgoing --json
+lextrace search "attorney advertising" --mode citation_reranked \
+  --graph artifacts/graphs/default --top-k 10
+```
+
+The source reuses validated `CitationEvidence` and `OpinionMapping` records.
+Opinion IDs are independently resolved to cluster IDs. Opinion edges resolving
+to one case pair collapse into a `CitationEdge`, while supporting opinion pairs,
+citation depths, and payload-derived provenance hashes remain attached. Self
+edges are marked. Unresolved mappings are counted and never fabricated. Reporter
+citations remain publication identifiers, not graph edges.
+
+Each graph contains `graph.sqlite3` and versioned `metadata.json`. Metadata records
+source hashes, a database checksum, mapping/corpus coverage, and degree statistics.
+Incoming and outgoing indexes avoid loading the graph into memory. Identical
+inputs reuse a graph; changed inputs, corruption, or version/checksum mismatches
+fail closed. Graphs and their source data remain ignored under `artifacts/` and
+`data/`.
+
+`CitationGraph.neighbors()` supports incoming, outgoing, or both directions.
+`expand()` supports deterministic, cycle-safe one- or two-hop traversal with an
+explicit node cap. Optional `as_of_date` excludes unknown or later filing dates.
+Outgoing is the default because it follows a seed toward authorities it cites.
+
+`citation_reranked` expands hybrid seeds, retains only filtered candidates with
+local searchable text, and sends the combined pool through the existing
+cross-encoder. The graph contributes no relevance score. Results retain bounded
+structured seed/direction/hop/edge provenance. Exact retrieval passages remain
+separate from citation relationship evidence. A filed-before filter can serve as
+the graph temporal cutoff.
+
+FastAPI adds `GET /cases/{case_id}/citations` with `direction`, `limit`, and
+`as_of_date`; `POST /search` accepts `citation_reranked`. Set
+`LEXTRACE_GRAPH_PATH` for lazy graph loading. Traces add graph identity and graph
+lookup/discovered/local/deduplicated/final-reranker counts.
+
+```mermaid
+flowchart TD
+    C[Normalized legal corpus] --> B[BM25]
+    C --> D[Dense retrieval]
+    B --> R[RRF]
+    D --> R
+    R --> S[Seed cases]
+    S --> G[Bounded citation expansion]
+    G --> X[Existing cross-encoder]
+    X --> E[Exact evidence passage]
+    E --> U[CLI / FastAPI]
+```
+
+The cached pilot graph is sparse because 92 of 101 cited opinions were not mapped
+before an earlier quota stop. It validates engineering behavior, not retrieval
+improvement. Citation expansion is an engineering candidate-generation mechanism,
+not GraphRAG or the future LexTrace research contribution. Treatment labels,
+authority weighting, graph ranking, and complete acquisition remain deferred.

@@ -65,6 +65,7 @@ class CitationNeighbor(Record):
 class ExpansionResult(Record):
     seed_case_ids: list[GraphId]
     neighbors: list[CitationNeighbor]
+    provenance: dict[GraphId, list[CitationNeighbor]]
     discovered_count: int
     deduplicated_count: int
 

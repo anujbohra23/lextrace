@@ -4,18 +4,24 @@ import os
 import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
+from typing import Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 
 from lextrace.config import APP_TITLE
 from lextrace.domain.case import Case
+from lextrace.graph.contracts import CitationNeighbor, GraphError
 from lextrace.retrieval.contracts import RetrievalError, SearchRequest, SearchResponse
 from lextrace.retrieval.engine import LexTraceRetriever
 
 
 def create_app(
-    retriever: LexTraceRetriever | None = None, *, index_path: Path | None = None
+    retriever: LexTraceRetriever | None = None,
+    *,
+    index_path: Path | None = None,
+    graph_path: Path | None = None,
 ) -> FastAPI:
     lock = threading.Lock()
     engine = retriever
@@ -39,9 +45,15 @@ def create_app(
                             os.environ.get(
                                 "LEXTRACE_INDEX_PATH", "artifacts/indexes/default"
                             )
-                        )
+                        ),
+                        graph_path=graph_path
+                        or (
+                            Path(value)
+                            if (value := os.environ.get("LEXTRACE_GRAPH_PATH"))
+                            else None
+                        ),
                     )
-                except RetrievalError as error:
+                except (RetrievalError, GraphError) as error:
                     raise HTTPException(status_code=503, detail=str(error)) from None
         return engine
 
@@ -62,6 +74,30 @@ def create_app(
         if case is None:
             raise HTTPException(status_code=404, detail="Case not found.")
         return case
+
+    @application.get(
+        "/cases/{case_id}/citations", response_model=list[CitationNeighbor]
+    )
+    def citations(
+        case_id: str,
+        direction: Literal["outgoing", "incoming", "both"] = "outgoing",
+        limit: int = Query(default=100, ge=1, le=1000),
+        as_of_date: date | None = None,
+    ) -> list[CitationNeighbor]:
+        current = get_engine()
+        if current.graph is None:
+            raise HTTPException(status_code=503, detail="Citation graph unavailable.")
+        if current.graph.get_node(case_id) is None:
+            raise HTTPException(status_code=404, detail="Case not found in graph.")
+        try:
+            return current.graph.neighbors(
+                case_id,
+                direction=direction,
+                limit=limit,
+                as_of_date=as_of_date,
+            )
+        except GraphError as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
 
     return application
 

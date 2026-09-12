@@ -144,3 +144,27 @@ model versions, and timings.
 
 The exact NumPy backend and in-memory lexical corpus suit reproducible small and
 moderate local experiments. They are not a web-scale serving architecture.
+
+## Citation intelligence and graph infrastructure v1
+
+`graph/contracts.py` defines backend-independent nodes, directed case edges,
+supporting opinion relations, traversal results, and health statistics. The
+builder consumes existing `CitationEvidence` and `OpinionMapping` records,
+resolves opinion IDs to known clusters, and aggregates supports by case pair.
+Unresolved mappings remain counted; self edges remain marked.
+
+`graph/build.py` atomically creates a read-only SQLite store and metadata under
+`artifacts/graphs/`. Node, edge, support, and format tables retain court/date and
+opinion provenance; incoming/outgoing indexes support traversal. Nodes may lack
+local text, so `searchable` records corpus availability. External metadata binds
+the database checksum to canonical corpus and evidence hashes.
+
+`graph/store.py` exposes `get_node`, `get_outgoing`, `get_incoming`, `neighbors`,
+and bounded `expand`. Traversal is deterministic, cycle safe, limited to one or
+two hops, explicitly capped, and optionally filtered by filing date in SQL.
+Candidates retain bounded paths from multiple seeds.
+
+`citation_reranked` runs after RRF, expands configured seeds, intersects graph
+nodes with the filtered local corpus, and uses the unchanged cross-encoder for
+final scoring. Citation edges supply candidates, never ranking scores. Structured
+diagnostics explain graph discovery while passages remain exact retrieval evidence.
