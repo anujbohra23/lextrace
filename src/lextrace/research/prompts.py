@@ -14,6 +14,10 @@ PromptId = Literal[
     "claim-extraction",
     "claim-verification",
     "memo-revision",
+    "matter-issues",
+    "matter-claims",
+    "matter-counter",
+    "matter-verification",
 ]
 
 

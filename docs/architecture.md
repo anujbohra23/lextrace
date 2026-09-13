@@ -1,7 +1,13 @@
 # Architecture
 
+LexTrace v2 adds a private Matter Workspace and Argument X-Ray around the
+existing public case corpus, retrieval engine, and research workflow. See
+[the v2 architecture and privacy contract](v2-argument-xray.md).
+
 LexTrace is one Python package with synchronous ingestion and retrieval CLI flows
-and a FastAPI application. Database persistence remains deferred.
+and a FastAPI application. The local research runtime and private matter
+workspace persist separately in SQLite; public Case records remain in the
+versioned JSONL/index pipeline.
 
 ## Implemented ingestion flow
 
@@ -40,7 +46,8 @@ tests/fixtures/. Ranking, retrieval, and evaluation packages remain placeholders
 
 ## Deferred infrastructure
 
-No database, external vector store, LLM, RAG, agents, or frontend is included.
+That initial ingestion slice used no database, external vector store, LLM,
+workflow, or frontend; later sections document the systems added afterward.
 
 ## Milestone 2: local corpora
 
