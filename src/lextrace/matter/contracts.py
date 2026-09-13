@@ -1,6 +1,6 @@
 """Typed matter, document, provenance, and Argument X-Ray records."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Annotated, Literal
 
 from pydantic import Field, model_validator
@@ -27,6 +27,8 @@ class Matter(Record):
     name: Annotated[str, Field(min_length=1, max_length=200)]
     court: str | None = None
     jurisdiction: str | None = None
+    state: str | None = None
+    as_of_date: date | None = None
     reference: str | None = None
     created_at: datetime
     updated_at: datetime
