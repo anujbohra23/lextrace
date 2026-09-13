@@ -6,9 +6,10 @@ import shutil
 import sqlite3
 import threading
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
+from lextrace.graph.intelligence_contracts import DoctrineAnalysis, TreatmentAnnotation
 from lextrace.matter.contracts import (
     ArgumentFinding,
     DocumentSection,
@@ -102,6 +103,16 @@ class MatterStore:
                   claim_id TEXT, status TEXT NOT NULL, error_code TEXT,
                   created_at TEXT NOT NULL, completed_at TEXT,
                   FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS treatment_annotations_v1 (
+                  matter_id TEXT NOT NULL, claim_id TEXT NOT NULL,
+                  annotation_id TEXT NOT NULL, payload TEXT NOT NULL,
+                  PRIMARY KEY(matter_id,claim_id,annotation_id),
+                  FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS doctrine_cache_v1 (
+                  matter_id TEXT NOT NULL, claim_id TEXT NOT NULL,
+                  identity TEXT NOT NULL, payload TEXT NOT NULL,
+                  PRIMARY KEY(matter_id,claim_id),
+                  FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
                 """
             )
 
@@ -115,6 +126,8 @@ class MatterStore:
         *,
         court: str | None = None,
         jurisdiction: str | None = None,
+        state: str | None = None,
+        as_of_date: date | None = None,
         reference: str | None = None,
     ) -> Matter:
         now = _now()
@@ -123,6 +136,8 @@ class MatterStore:
             name=name,
             court=court,
             jurisdiction=jurisdiction,
+            state=state,
+            as_of_date=as_of_date,
             reference=reference,
             created_at=now,
             updated_at=now,
@@ -278,6 +293,7 @@ class MatterStore:
                 (analysis.document_id,),
             ).fetchall()
             for row in old_claims:
+                self.invalidate_doctrine(analysis.matter_id, row[0], clear_reviews=True)
                 self._db.execute(
                     "DELETE FROM matter_evidence WHERE claim_id=?", (row[0],)
                 )
@@ -416,12 +432,21 @@ class MatterStore:
 
     def update_claim(self, claim: LegalClaim) -> None:
         with self._lock, self._db:
+            previous = self.claim(claim.matter_id, claim.claim_id)
             self._db.execute(
                 "UPDATE matter_claims SET payload=? WHERE id=? AND matter_id=?",
                 (claim.model_dump_json(), claim.claim_id, claim.matter_id),
             )
             self._db.execute(
                 "DELETE FROM argument_findings WHERE claim_id=?", (claim.claim_id,)
+            )
+            self.invalidate_doctrine(
+                claim.matter_id,
+                claim.claim_id,
+                clear_reviews=(
+                    previous is None
+                    or previous.normalized_proposition != claim.normalized_proposition
+                ),
             )
 
     def finding(self, matter_id: str, claim_id: str) -> ArgumentFinding | None:
@@ -447,6 +472,98 @@ class MatterStore:
                 "DELETE FROM argument_findings WHERE claim_id=?", (finding.claim_id,)
             )
             self._save_finding(finding)
+            claim = self._db.execute(
+                "SELECT matter_id FROM matter_claims WHERE id=?", (finding.claim_id,)
+            ).fetchone()
+            if claim is not None:
+                self.invalidate_doctrine(claim[0], finding.claim_id)
+
+    def invalidate_doctrine(
+        self, matter_id: str, claim_id: str, *, clear_reviews: bool = False
+    ) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "DELETE FROM doctrine_cache_v1 WHERE matter_id=? AND claim_id=?",
+                (_id(matter_id), _id(claim_id)),
+            )
+            if clear_reviews:
+                self._db.execute(
+                    "DELETE FROM treatment_annotations_v1 "
+                    "WHERE matter_id=? AND claim_id=?",
+                    (matter_id, claim_id),
+                )
+
+    def cached_doctrine(
+        self, matter_id: str, claim_id: str, identity: str
+    ) -> DoctrineAnalysis | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM doctrine_cache_v1 "
+                "WHERE matter_id=? AND claim_id=? AND identity=?",
+                (_id(matter_id), _id(claim_id), identity),
+            ).fetchone()
+        return DoctrineAnalysis.model_validate_json(row[0]) if row else None
+
+    def save_doctrine(
+        self,
+        matter_id: str,
+        claim_id: str,
+        identity: str,
+        analysis: DoctrineAnalysis,
+    ) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO doctrine_cache_v1 VALUES (?,?,?,?)",
+                (matter_id, claim_id, identity, analysis.model_dump_json()),
+            )
+            for edge in analysis.trace.edges:
+                annotation = edge.treatment
+                old = self.treatment_review(
+                    matter_id, claim_id, annotation.annotation_id
+                )
+                if old is None:
+                    self._db.execute(
+                        "INSERT INTO treatment_annotations_v1 VALUES (?,?,?,?)",
+                        (
+                            matter_id,
+                            claim_id,
+                            annotation.annotation_id,
+                            annotation.model_dump_json(),
+                        ),
+                    )
+
+    def treatment_review(
+        self, matter_id: str, claim_id: str, annotation_id: str
+    ) -> TreatmentAnnotation | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM treatment_annotations_v1 "
+                "WHERE matter_id=? AND claim_id=? AND annotation_id=?",
+                (_id(matter_id), _id(claim_id), annotation_id),
+            ).fetchone()
+        return TreatmentAnnotation.model_validate_json(row[0]) if row else None
+
+    def review_treatment(
+        self,
+        matter_id: str,
+        claim_id: str,
+        annotation_id: str,
+        state: str,
+    ) -> TreatmentAnnotation:
+        if state not in {"CONFIRMED", "REJECTED", "UNCERTAIN"}:
+            raise MatterError("Treatment review state is invalid.")
+        old = self.treatment_review(matter_id, claim_id, annotation_id)
+        if old is None or self.claim(matter_id, claim_id) is None:
+            raise MatterError("Treatment annotation was not found.")
+        reviewed = old.model_copy(update={"review_state": state, "reviewed_at": _now()})
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE treatment_annotations_v1 SET payload=? "
+                "WHERE matter_id=? AND claim_id=? AND annotation_id=?",
+                (reviewed.model_dump_json(), matter_id, claim_id, annotation_id),
+            )
+            self.invalidate_doctrine(matter_id, claim_id)
+        return reviewed
 
     def create_job(
         self, matter_id: str, document_id: str, claim_id: str | None = None
