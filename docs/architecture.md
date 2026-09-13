@@ -237,3 +237,20 @@ flowchart TB
     T[Safe traces] --- L
     E[Evaluation] --- L
 ```
+
+## Precedent intelligence v1
+
+Private Matter claim → resolved seed authority → immutable case citation graph
+→ bounded earlier/later neighborhood → exact local citing-opinion context →
+conservative treatment annotation → evidence-backed doctrine events → argument
+impact. The existing graph database remains format 1 and read-only. The Matter
+runtime database adds versioned annotation and derived-analysis tables; raw
+`CitationEdge` records are never overwritten. Claim edits and human treatment
+review invalidate only that claim's derived doctrine cache.
+
+`graph/courts.py` centralizes known federal court IDs and hierarchy. A hierarchy
+category describes institutional position; it is not a relevance score or proof
+that an opinion governs a particular issue. `graph/intelligence.py` reuses the
+existing graph and paragraph passage IDs. It reports unrecoverable contexts and
+local-corpus gaps instead of inferring treatment from bare citations. See
+[precedent intelligence documentation](v2-precedent-intelligence.md).

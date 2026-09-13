@@ -13,6 +13,13 @@ support and counter-authority. Each finding exposes its evidence and research
 gaps. A lawyer can edit a proposition, dismiss an irrelevant claim, pin or remove
 an authority, and rerun one claim without reprocessing the whole document.
 
+The claim detail now adds **Precedent Trace + Authority Intelligence + Doctrine
+Evolution v1**: a bounded view of earlier and later citation links, a federal
+court-hierarchy relationship to the Matter forum, recovered citation context,
+conservative treatment labels, and an evidence-backed timeline. A lawyer can
+confirm, reject, or mark treatment uncertain without changing the raw citation
+edge. Relevance, hierarchy, treatment, and argument impact remain separate.
+
 LexTrace turns a legal question into a bounded research plan, retrieves exact
 passages from real judicial decisions, inspects citation relationships, drafts
 competing analyses, and verifies every substantive claim against run-local
@@ -37,6 +44,8 @@ matter creation do not need an LLM key. Uploaded documents and their local
 structured cache live under the private runtime directory, not the public case
 corpus. Deleting a matter removes its files and analysis records when no job is
 active. See [Argument X-Ray architecture and privacy](docs/v2-argument-xray.md).
+See [Precedent intelligence rules and coverage](docs/v2-precedent-intelligence.md)
+before relying on a treatment or authority category.
 
 ## Setup
 

@@ -353,12 +353,13 @@ def doctrine_for_claim(
     later_adverse = [
         event for event in adverse if event.annotation_id in later_annotations
     ]
+    annotations = {item.treatment.annotation_id: item.treatment for item in trace.edges}
     synthesis = [
         GroundedStatement(
             text=(
-                f"{event.case_name or event.case_id} has explicit "
-                f"{event.category.lower().replace('_', ' ')} language "
-                "in a recovered citation context."
+                f"{event.case_name or event.case_id} has a recovered citation "
+                "context classified as "
+                f"{annotations[event.annotation_id].generated_label}."
             ),
             annotation_ids=[event.annotation_id],
         )

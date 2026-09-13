@@ -182,6 +182,7 @@ def test_trace_context_treatment_and_doctrine(
         == "WEAKENS"
     )
     assert result.state.synthesis[0].annotation_ids
+    assert "classified as OVERRULES" in result.state.synthesis[0].text
     assert "incomplete" in result.state.coverage_warning
     engine.close()
 

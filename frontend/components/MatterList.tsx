@@ -9,6 +9,7 @@ export function MatterList() {
   const [matters, setMatters] = useState<Matter[]>([]);
   const [name, setName] = useState("");
   const [court, setCourt] = useState("");
+  const [asOfDate, setAsOfDate] = useState("");
   const [error, setError] = useState(false);
 
   useEffect(() => { void api<Matter[]>("/matters").then(setMatters).catch(() => setError(true)); }, []);
@@ -18,10 +19,12 @@ export function MatterList() {
     setError(false);
     try {
       const matter = await api<Matter>("/matters", {
-        method: "POST", body: JSON.stringify({ name, court: court || null }),
+        method: "POST", body: JSON.stringify({
+          name, court: court || null, as_of_date: asOfDate || null,
+        }),
       });
       setMatters((previous) => [...previous, matter]);
-      setName(""); setCourt("");
+      setName(""); setCourt(""); setAsOfDate("");
     } catch { setError(true); }
   }
 
@@ -36,6 +39,7 @@ export function MatterList() {
         <h2>Create a matter</h2>
         <label>Matter name<input required maxLength={200} value={name} onChange={(event) => setName(event.target.value)} placeholder="Smith v. Acme" /></label>
         <label>Court or forum<input value={court} onChange={(event) => setCourt(event.target.value)} placeholder="S.D.N.Y." /></label>
+        <label>As-of date (optional)<input type="date" value={asOfDate} onChange={(event) => setAsOfDate(event.target.value)} /></label>
         <button>Create matter</button>
       </form>
       <div><h2>Your matters</h2>

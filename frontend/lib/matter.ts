@@ -5,6 +5,7 @@ export type Span = {
 };
 export type Matter = {
   matter_id: string; name: string; court: string | null; jurisdiction: string | null;
+  state: string | null; as_of_date: string | null;
   reference: string | null; status: string;
 };
 export type Document = {
