@@ -23,6 +23,8 @@ class AppSettings(BaseModel):
     graph_path: Path | None = None
     runtime_db: Path = Path("artifacts/runtime/lextrace.sqlite3")
     cache_db: Path = Path("artifacts/runtime/cache.sqlite3")
+    matter_db: Path = Path("artifacts/runtime/matters.sqlite3")
+    private_matter_root: Path = Path("artifacts/runtime/private_matters")
     llm_model: str | None = None
     llm_base_url: str | None = None
     persist_content: bool = True
@@ -47,6 +49,17 @@ class AppSettings(BaseModel):
                 cache_db=Path(
                     os.environ.get(
                         "LEXTRACE_CACHE_DB", "artifacts/runtime/cache.sqlite3"
+                    )
+                ),
+                matter_db=Path(
+                    os.environ.get(
+                        "LEXTRACE_MATTER_DB", "artifacts/runtime/matters.sqlite3"
+                    )
+                ),
+                private_matter_root=Path(
+                    os.environ.get(
+                        "LEXTRACE_PRIVATE_MATTER_ROOT",
+                        "artifacts/runtime/private_matters",
                     )
                 ),
                 llm_model=os.environ.get("LEXTRACE_LLM_MODEL"),

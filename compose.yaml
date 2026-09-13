@@ -9,6 +9,8 @@ services:
       LEXTRACE_GRAPH_PATH: /app/artifacts/graphs/default
       LEXTRACE_RUNTIME_DB: /app/runtime/lextrace.sqlite3
       LEXTRACE_CACHE_DB: /app/runtime/cache.sqlite3
+      LEXTRACE_MATTER_DB: /app/runtime/matters.sqlite3
+      LEXTRACE_PRIVATE_MATTER_ROOT: /app/runtime/private_matters
       LEXTRACE_CORS_ORIGINS: http://localhost:3000
     volumes:
       - ./artifacts:/app/artifacts:ro
