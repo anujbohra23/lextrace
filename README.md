@@ -1,18 +1,42 @@
 # LexTrace
 
-**Evidence-grounded agentic legal research over U.S. case law.**
+**Litigation Argument Intelligence**
+
+Trace every argument. Test every authority. Find the weakness before opposing
+counsel does.
+
+LexTrace v2 adds a private Matter Workspace and Argument X-Ray for litigation
+documents. Upload a PDF, DOCX, TXT, or Markdown brief; inspect legal issues and
+claims against their exact source spans; resolve cited reporter references into
+the local case corpus; and compare cited passages with independently discovered
+support and counter-authority. Each finding exposes its evidence and research
+gaps. A lawyer can edit a proposition, dismiss an irrelevant claim, pin or remove
+an authority, and rerun one claim without reprocessing the whole document.
 
 LexTrace turns a legal question into a bounded research plan, retrieves exact
 passages from real judicial decisions, inspects citation relationships, drafts
 competing analyses, and verifies every substantive claim against run-local
 evidence. It exposes the complete safe trace through a CLI, FastAPI, and a focused
-research workspace rather than a generic chat interface.
+research workspace rather than a generic chat interface. The existing research
+and search tools remain available at `/research` and `/search`; matters are the
+home page.
 
 The system combines CourtListener ingestion, BM25 and dense retrieval, reciprocal
 rank fusion, citation expansion, cross-encoder reranking, LangGraph orchestration,
 claim-level verification, SQLite runtime persistence, version-safe structured
 caching, and a Next.js frontend. It does not claim comprehensive legal relevance
 or replace professional legal advice.
+
+## Matter Workspace demo
+
+Build a local index first, then start both services with `docker compose up
+--build`. Open `http://localhost:3000`, create a matter, and upload a small legal
+document. Analysis runs in a bounded background job; it requires
+`OPENAI_API_KEY` and `LEXTRACE_LLM_MODEL` in your local ignored `.env`. Search and
+matter creation do not need an LLM key. Uploaded documents and their local
+structured cache live under the private runtime directory, not the public case
+corpus. Deleting a matter removes its files and analysis records when no job is
+active. See [Argument X-Ray architecture and privacy](docs/v2-argument-xray.md).
 
 ## Setup
 
@@ -98,8 +122,10 @@ records workflow/prompt/model versions, latency, retrieval traces, retries, toke
 counts, errors, and grounding counts. Cost stays null unless a provider supplies
 it; no price table is embedded.
 
-Runs have IDs but no persistent checkpoints in this milestone, avoiding private
-questions and evidence on disk by default. The offline evaluation helper measures
+Research runs now have SQLite status, trace, and optional result persistence;
+`LEXTRACE_PERSIST_CONTENT=false` omits raw questions and complete responses from
+the run store. Resume restarts a bounded workflow rather than a LangGraph node.
+The offline evaluation helper measures
 retrieval coverage when labels exist, citation and passage existence, claim
 support, completion/errors/revisions, and latency/token/cost totals. Optional
 human or judge scoring is an extension point, never the grounding authority.

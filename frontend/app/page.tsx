@@ -1,5 +1,5 @@
-import { ResearchView } from "@/components/ResearchView";
+import { MatterList } from "@/components/MatterList";
 
 export default function Home() {
-  return <ResearchView />;
+  return <MatterList />;
 }
