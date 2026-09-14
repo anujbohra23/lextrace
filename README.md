@@ -5,6 +5,11 @@
 Trace every argument. Test every authority. Find the weakness before opposing
 counsel does.
 
+Start with the [synthetic product walkthrough](docs/v2-demo.md) for the full
+Matter-to-monitoring flow, or follow [Run locally](#run-locally) to launch the
+API and web workspace. LexTrace is an engineering prototype over a local,
+incomplete corpus; its findings require lawyer review.
+
 LexTrace v2 adds a private Matter Workspace and Argument X-Ray for litigation
 documents. Upload a PDF, DOCX, TXT, or Markdown brief; inspect legal issues and
 claims against their exact source spans; resolve cited reporter references into
@@ -148,8 +153,9 @@ human or judge scoring is an extension point, never the grounding authority.
 
 LexTrace is a legal research system, not a substitute for professional legal
 advice. Results are limited by the local corpus, retrieval recall, source quality,
-provider reliability, and the lack of legal treatment classification or
-statistically calibrated confidence.
+provider reliability, conservative and incomplete treatment classification,
+and the lack of statistically calibrated confidence. It is not a comprehensive
+citator and does not predict legal outcomes.
 
 ## Ingest one case
 
