@@ -5,9 +5,12 @@ import { ChangeEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api } from "@/lib/api";
 import { Claim, Document, DocumentDetail, Evidence, Finding, Issue, Matter, uploadDocument } from "@/lib/matter";
 import { PrecedentPanel } from "@/components/PrecedentPanel";
+import { DeepResearchPanel } from "@/components/DeepResearchPanel";
+import { EvidenceMatrixPanel } from "@/components/EvidenceMatrixPanel";
+import { MatrixRow } from "@/lib/deepResearch";
 
 type Job = { job_id: string; status: string; error_code: string | null };
-type Tab = "documents" | "issues" | "xray" | "authorities";
+type Tab = "documents" | "issues" | "xray" | "matrix" | "authorities";
 
 export function MatterWorkspace({ matterId }: { matterId: string }) {
   const [matter, setMatter] = useState<Matter | null>(null);
@@ -25,6 +28,7 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [proposition, setProposition] = useState("");
+  const [matrix, setMatrix] = useState<MatrixRow[]>([]);
 
   const refresh = useCallback(async () => {
     const [nextMatter, nextDocs, nextClaims, nextFindings, nextIssues] = await Promise.all([
@@ -35,6 +39,10 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
       api<Issue[]>(`/matters/${matterId}/issues`),
     ]);
     setMatter(nextMatter); setDocuments(nextDocs); setClaims(nextClaims); setFindings(nextFindings); setIssues(nextIssues);
+    try {
+      const rows = await api<MatrixRow[]>(`/matters/${matterId}/evidence-matrix`);
+      if (Array.isArray(rows)) setMatrix(rows);
+    } catch { setMatrix([]); }
   }, [matterId]);
 
   useEffect(() => {
@@ -113,11 +121,27 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
     } catch { setError("Claim review could not be saved."); }
   }
 
+  async function toggleLock() {
+    if (!selectedClaim) return;
+    try {
+      await api(`/matters/${matterId}/claims/${selectedClaim.claim_id}`, {
+        method: "PATCH", body: JSON.stringify({ wording_locked: !selectedClaim.wording_locked }),
+      });
+      await refresh();
+    } catch { setError("Claim wording lock could not be saved."); }
+  }
+
   async function reanalyze() {
     if (!selectedClaim) return;
     try {
       setJob(await api<Job>(`/matters/${matterId}/claims/${selectedClaim.claim_id}/reanalyze`, { method: "POST" }));
     } catch { setError("Claim analysis could not start."); }
+  }
+
+  async function reanalyzeIssue(issueId: string) {
+    try {
+      setJob(await api<Job>(`/matters/${matterId}/issues/${issueId}/reanalyze`, { method: "POST" }));
+    } catch { setError("Issue analysis could not start."); }
   }
 
   async function editAuthority(caseId: string, evidenceId: string | null, update: { pinned?: boolean; removed?: boolean }) {
@@ -132,17 +156,19 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
 
   return <>
     <div className="matter-heading"><div><p className="eyebrow">Matter workspace</p><h1>{matter?.name ?? "Loading matter…"}</h1><p>{matter?.court || matter?.jurisdiction || "Forum unspecified"}</p></div><Link href="/matters">All matters →</Link></div>
-    <div className="matter-tabs" role="tablist">{(["documents", "issues", "xray", "authorities"] as Tab[]).map((name) =>
+    <div className="matter-tabs" role="tablist">{(["matrix", "documents", "issues", "xray", "authorities"] as Tab[]).map((name) =>
       <button key={name} type="button" role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name === "xray" ? "Argument X-Ray" : name}</button>)}</div>
     {error && <p role="alert" className="notice">{error}</p>}
     {job && <p role="status" className="notice">Analysis: {job.status}{job.error_code ? ` (${job.error_code})` : ""}</p>}
+
+    {tab === "matrix" && <EvidenceMatrixPanel matterId={matterId} rows={matrix} openClaim={openClaim} />}
 
     {tab === "documents" && <section className="workspace"><h2>Documents</h2><p>Uploaded files stay in private local runtime storage. Scanned PDFs require OCR and are not analyzed.</p>
       <label className="upload-control">Upload PDF, DOCX, TXT, or Markdown<input type="file" accept=".pdf,.docx,.txt,.md" disabled={busy} onChange={upload} /></label>
       <div className="matter-cards">{documents.map((doc) => <article key={doc.document_id}><h3>{doc.filename}</h3><p>{doc.document_type.toUpperCase()} · {doc.page_count ? `${doc.page_count} pages` : "Pages unavailable"} · {doc.ingestion_status}</p>{doc.analysis_warnings?.map((warning) => <p key={warning} className="notice">{warning}</p>)}<button disabled={doc.ingestion_status !== "READY" || job?.status === "running"} onClick={() => void analyze(doc.document_id)}>Analyze document</button></article>)}</div>
     </section>}
 
-    {tab === "issues" && <section className="workspace"><h2>Legal issues</h2><p>Each issue groups claims extracted from uploaded writing. Review source text before relying on any finding.</p><div className="matter-cards">{issues.map((issue) => <article key={issue.issue_id}><h3>{issue.label}</h3><p>{claims.filter((claim) => claim.issue_id === issue.issue_id).length} claims</p>{issue.uncertainty && <p>Uncertainty: {issue.uncertainty}</p>}</article>)}</div></section>}
+    {tab === "issues" && <section className="workspace"><h2>Legal issues</h2><p>Each issue groups claims extracted from uploaded writing. Review source text before relying on any finding.</p><div className="matter-cards">{issues.map((issue) => <article key={issue.issue_id}><h3>{issue.label}</h3><p>{claims.filter((claim) => claim.issue_id === issue.issue_id).length} claims</p>{issue.uncertainty && <p>Uncertainty: {issue.uncertainty}</p>}<button onClick={() => void reanalyzeIssue(issue.issue_id)}>Re-analyze this issue</button></article>)}</div></section>}
 
     {tab === "xray" && <section className="workspace"><h2>Argument X-Ray</h2><p>Categories describe evidence coverage in this local corpus; they do not predict a legal outcome.</p>
       <div className="matrix-controls"><label>Status<select value={filter} onChange={(event) => setFilter(event.target.value)}><option>ALL</option>{["STRONG", "MIXED", "VULNERABLE", "UNSUPPORTED", "INSUFFICIENT_EVIDENCE"].map((value) => <option key={value}>{value}</option>)}</select></label><label>Issue<select value={issueFilter} onChange={(event) => setIssueFilter(event.target.value)}><option>ALL</option>{issueIds.map((id) => <option key={id} value={id}>{issues.find((issue) => issue.issue_id === id)?.label ?? id}</option>)}</select></label><label>Sort<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="source">Document order</option><option value="status">Status</option></select></label></div>
@@ -155,9 +181,9 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
     {selectedClaim && <section className="claim-detail" aria-label="Claim detail"><div className="claim-detail-head"><div><p className="eyebrow">Claim detail · provenance</p><h2>{selectedClaim.normalized_proposition}</h2></div><button className="close-button" onClick={() => setSelectedId(null)}>Close</button></div>
       <h3>Exact document source</h3><p>{documents.find((doc) => doc.document_id === selectedClaim.document_id)?.filename} {selectedClaim.span.page ? `· page ${selectedClaim.span.page}` : ""} · characters {selectedClaim.span.start}–{selectedClaim.span.end}</p>
       {detail?.document.document_id === selectedClaim.document_id && <div className="source-viewer">{detail.text.slice(0, selectedClaim.span.start)}<mark>{detail.text.slice(selectedClaim.span.start, selectedClaim.span.end)}</mark>{detail.text.slice(selectedClaim.span.end)}</div>}
-      <h3>Normalized proposition</h3><textarea value={proposition} onChange={(event) => setProposition(event.target.value)} /><div className="review-actions"><button onClick={() => void saveClaim()}>Save edit</button><button onClick={() => void markIrrelevant()}>{selectedClaim.irrelevant ? "Restore claim" : "Mark irrelevant"}</button><button onClick={() => void reanalyze()}>Re-analyze this claim</button></div>
+      <h3>Normalized proposition</h3><textarea value={proposition} disabled={!!selectedClaim.wording_locked} onChange={(event) => setProposition(event.target.value)} /><div className="review-actions"><button disabled={!!selectedClaim.wording_locked} onClick={() => void saveClaim()}>Save edit</button><button onClick={() => void toggleLock()}>{selectedClaim.wording_locked ? "Unlock wording" : "Lock wording"}</button><button onClick={() => void markIrrelevant()}>{selectedClaim.irrelevant ? "Restore claim" : "Mark irrelevant"}</button><button onClick={() => void reanalyze()}>Re-analyze this claim</button></div>
       {selectedFinding ? <><h3>Why this finding?</h3><p><span className={`finding-status ${selectedFinding.vulnerability.toLowerCase()}`}>{selectedFinding.vulnerability}</span> {selectedFinding.explanation}</p><p>Verification: {selectedFinding.verification_status} · Research: {selectedFinding.research_coverage}</p>{selectedFinding.unresolved_citation_ids.length > 0 && <p className="notice">{selectedFinding.unresolved_citation_ids.length} unresolved citation reference(s). Additional research is needed.</p>}
-        <h3>Exact case-law passages</h3>{selectedFinding.evidence.map((evidence) => <div key={evidence.evidence_id}>{!selectedFinding.cited_authorities.some((link) => link.evidence_id === evidence.evidence_id && link.removed) && <EvidenceCard evidence={evidence} />}{selectedFinding.cited_authorities.filter((link) => link.evidence_id === evidence.evidence_id).map((link) => <div key={`${link.case_id}-${link.relation}-${link.evidence_id}`} className="review-actions"><span>{link.removed ? "Removed by reviewer" : link.relation}</span><button onClick={() => void editAuthority(link.case_id, link.evidence_id, { pinned: !link.pinned })}>{link.pinned ? "Unpin" : "Pin"}</button><button onClick={() => void editAuthority(link.case_id, link.evidence_id, { removed: !link.removed })}>{link.removed ? "Restore" : "Remove suggestion"}</button></div>)}</div>)}<PrecedentPanel matterId={matterId} claimId={selectedClaim.claim_id} /></> : <p>This claim needs re-analysis after the latest edit.</p>}
+        <h3>Exact case-law passages</h3>{selectedFinding.evidence.map((evidence) => <div key={evidence.evidence_id}>{!selectedFinding.cited_authorities.some((link) => link.evidence_id === evidence.evidence_id && link.removed) && <EvidenceCard evidence={evidence} />}{selectedFinding.cited_authorities.filter((link) => link.evidence_id === evidence.evidence_id).map((link) => <div key={`${link.case_id}-${link.relation}-${link.evidence_id}`} className="review-actions"><span>{link.removed ? "Removed by reviewer" : link.relation}</span><button onClick={() => void editAuthority(link.case_id, link.evidence_id, { pinned: !link.pinned })}>{link.pinned ? "Unpin" : "Pin"}</button><button onClick={() => void editAuthority(link.case_id, link.evidence_id, { removed: !link.removed })}>{link.removed ? "Restore" : "Remove suggestion"}</button></div>)}</div>)}<DeepResearchPanel matterId={matterId} claimId={selectedClaim.claim_id} onUpdate={refresh} /><PrecedentPanel matterId={matterId} claimId={selectedClaim.claim_id} /></> : <p>This claim needs re-analysis after the latest edit.</p>}
     </section>}
   </>;
 }

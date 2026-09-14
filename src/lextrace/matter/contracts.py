@@ -102,6 +102,7 @@ class LegalClaim(Record):
     verification_state: VerificationStatus = "INSUFFICIENT_EVIDENCE"
     irrelevant: bool = False
     manually_edited: bool = False
+    wording_locked: bool = False
 
 
 class DocumentCitation(Record):

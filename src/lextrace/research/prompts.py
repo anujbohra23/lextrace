@@ -18,6 +18,8 @@ PromptId = Literal[
     "matter-claims",
     "matter-counter",
     "matter-verification",
+    "red-team-verification",
+    "matter-fact-comparison",
 ]
 
 

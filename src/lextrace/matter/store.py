@@ -27,6 +27,12 @@ from lextrace.matter.documents import (
     safe_filename,
     segment_document,
 )
+from lextrace.matter.research_contracts import (
+    AttackFinding,
+    DeepResearchPlan,
+    DeepResearchRun,
+    ResearchCoverage,
+)
 
 IDENTIFIER = re.compile(r"^[0-9a-f]{32}$")
 
@@ -113,6 +119,21 @@ class MatterStore:
                   identity TEXT NOT NULL, payload TEXT NOT NULL,
                   PRIMARY KEY(matter_id,claim_id),
                   FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS research_plans_v2 (
+                  matter_id TEXT NOT NULL, claim_id TEXT PRIMARY KEY,
+                  payload TEXT NOT NULL,
+                  FOREIGN KEY(claim_id) REFERENCES matter_claims(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS research_runs_v2 (
+                  id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, claim_id TEXT NOT NULL,
+                  payload TEXT NOT NULL,
+                  FOREIGN KEY(claim_id) REFERENCES matter_claims(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS research_coverage_v2 (
+                  claim_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+                  FOREIGN KEY(claim_id) REFERENCES matter_claims(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS attack_findings_v2 (
+                  id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, claim_id TEXT NOT NULL,
+                  payload TEXT NOT NULL,
+                  FOREIGN KEY(claim_id) REFERENCES matter_claims(id) ON DELETE CASCADE);
                 """
             )
 
@@ -422,6 +443,17 @@ class MatterStore:
                     ),
                 )
 
+    def facts(self, matter_id: str, document_id: str) -> list[MatterFact]:
+        if self.get_document(matter_id, document_id) is None:
+            raise MatterError("Document was not found.")
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM matter_facts WHERE matter_id=? "
+                "AND document_id=? ORDER BY rowid",
+                (matter_id, document_id),
+            ).fetchall()
+        return [MatterFact.model_validate_json(row[0]) for row in rows]
+
     def claim(self, matter_id: str, claim_id: str) -> LegalClaim | None:
         with self._lock:
             row = self._db.execute(
@@ -448,6 +480,19 @@ class MatterStore:
                     or previous.normalized_proposition != claim.normalized_proposition
                 ),
             )
+            self.invalidate_research(claim.claim_id)
+
+    def set_claim_lock(self, matter_id: str, claim_id: str, locked: bool) -> LegalClaim:
+        claim = self.claim(matter_id, claim_id)
+        if claim is None:
+            raise MatterError("Claim was not found.")
+        claim.wording_locked = locked
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE matter_claims SET payload=? WHERE matter_id=? AND id=?",
+                (claim.model_dump_json(), matter_id, claim_id),
+            )
+        return claim
 
     def finding(self, matter_id: str, claim_id: str) -> ArgumentFinding | None:
         if self.claim(matter_id, claim_id) is None:
@@ -477,6 +522,118 @@ class MatterStore:
             ).fetchone()
             if claim is not None:
                 self.invalidate_doctrine(claim[0], finding.claim_id)
+                self.invalidate_research(finding.claim_id)
+
+    def invalidate_research(self, claim_id: str) -> None:
+        """Invalidate only derived state for this claim, retaining run history."""
+        with self._lock, self._db:
+            for table in (
+                "research_plans_v2",
+                "research_coverage_v2",
+                "attack_findings_v2",
+            ):
+                self._db.execute(f"DELETE FROM {table} WHERE claim_id=?", (claim_id,))
+
+    def research_plan(self, matter_id: str, claim_id: str) -> DeepResearchPlan | None:
+        if self.claim(matter_id, claim_id) is None:
+            return None
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM research_plans_v2 "
+                "WHERE matter_id=? AND claim_id=?",
+                (matter_id, claim_id),
+            ).fetchone()
+        return DeepResearchPlan.model_validate_json(row[0]) if row else None
+
+    def save_research_plan(self, plan: DeepResearchPlan) -> None:
+        if self.claim(plan.matter_id, plan.claim_id) is None:
+            raise MatterError("Claim was not found.")
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO research_plans_v2 VALUES (?,?,?)",
+                (plan.matter_id, plan.claim_id, plan.model_dump_json()),
+            )
+
+    def research_run(self, matter_id: str, run_id: str) -> DeepResearchRun | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM research_runs_v2 WHERE matter_id=? AND id=?",
+                (_id(matter_id), _id(run_id)),
+            ).fetchone()
+        return DeepResearchRun.model_validate_json(row[0]) if row else None
+
+    def latest_research_run(
+        self, matter_id: str, claim_id: str
+    ) -> DeepResearchRun | None:
+        if self.claim(matter_id, claim_id) is None:
+            return None
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM research_runs_v2 WHERE matter_id=? AND claim_id=? "
+                "AND json_extract(payload, '$.plan_id') != 'red-team' "
+                "ORDER BY rowid DESC LIMIT 1",
+                (matter_id, claim_id),
+            ).fetchone()
+        return DeepResearchRun.model_validate_json(row[0]) if row else None
+
+    def save_research_run(self, run: DeepResearchRun) -> None:
+        if self.claim(run.matter_id, run.claim_id) is None:
+            raise MatterError("Claim was not found.")
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO research_runs_v2 VALUES (?,?,?,?)",
+                (run.run_id, run.matter_id, run.claim_id, run.model_dump_json()),
+            )
+
+    def research_coverage(self, claim_id: str) -> ResearchCoverage | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM research_coverage_v2 WHERE claim_id=?", (claim_id,)
+            ).fetchone()
+        return ResearchCoverage.model_validate_json(row[0]) if row else None
+
+    def save_research_coverage(self, coverage: ResearchCoverage) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO research_coverage_v2 VALUES (?,?)",
+                (coverage.claim_id, coverage.model_dump_json()),
+            )
+
+    def attacks(
+        self, matter_id: str, claim_id: str | None = None
+    ) -> list[AttackFinding]:
+        _id(matter_id)
+        with self._lock:
+            if claim_id is None:
+                rows = self._db.execute(
+                    "SELECT payload FROM attack_findings_v2 "
+                    "WHERE matter_id=? ORDER BY id",
+                    (matter_id,),
+                ).fetchall()
+            else:
+                rows = self._db.execute(
+                    "SELECT payload FROM attack_findings_v2 "
+                    "WHERE matter_id=? AND claim_id=? ORDER BY id",
+                    (matter_id, _id(claim_id)),
+                ).fetchall()
+        return [AttackFinding.model_validate_json(row[0]) for row in rows]
+
+    def save_attacks(
+        self, matter_id: str, claim_id: str, attacks: list[AttackFinding]
+    ) -> None:
+        if self.claim(matter_id, claim_id) is None:
+            raise MatterError("Claim was not found.")
+        with self._lock, self._db:
+            self._db.execute(
+                "DELETE FROM attack_findings_v2 WHERE claim_id=?", (claim_id,)
+            )
+            self._db.executemany(
+                "INSERT INTO attack_findings_v2 VALUES (?,?,?,?)",
+                [
+                    (a.attack_id, matter_id, claim_id, a.model_dump_json())
+                    for a in attacks
+                ],
+            )
 
     def invalidate_doctrine(
         self, matter_id: str, claim_id: str, *, clear_reviews: bool = False
@@ -501,6 +658,17 @@ class MatterStore:
                 "SELECT payload FROM doctrine_cache_v1 "
                 "WHERE matter_id=? AND claim_id=? AND identity=?",
                 (_id(matter_id), _id(claim_id), identity),
+            ).fetchone()
+        return DoctrineAnalysis.model_validate_json(row[0]) if row else None
+
+    def latest_doctrine(self, matter_id: str, claim_id: str) -> DoctrineAnalysis | None:
+        if self.claim(matter_id, claim_id) is None:
+            return None
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM doctrine_cache_v1 "
+                "WHERE matter_id=? AND claim_id=?",
+                (matter_id, claim_id),
             ).fetchone()
         return DoctrineAnalysis.model_validate_json(row[0]) if row else None
 

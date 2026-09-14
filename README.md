@@ -20,6 +20,13 @@ conservative treatment labels, and an evidence-backed timeline. A lawyer can
 confirm, reject, or mark treatment uncertain without changing the raw citation
 edge. Relevance, hierarchy, treatment, and argument impact remain separate.
 
+**Deep Research + Red Team + Evidence Matrix v2** adds a transparent coverage
+assessment, typed research gaps, a lawyer-approved bounded search plan, and a
+separate adversarial check. The matrix is the central claim review surface and
+exports structured references as CSV. Coverage refers only to the local index;
+attack severity is not a prediction of a court's decision. See
+[Deep Research architecture and limits](docs/v2-deep-research.md).
+
 LexTrace turns a legal question into a bounded research plan, retrieves exact
 passages from real judicial decisions, inspects citation relationships, drafts
 competing analyses, and verifies every substantive claim against run-local

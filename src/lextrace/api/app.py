@@ -3,13 +3,14 @@
 import hashlib
 import json
 import threading
+import time
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Literal, cast
 
 from fastapi import (
     FastAPI,
@@ -22,6 +23,7 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import Field
 
 from lextrace.config import (
     APP_TITLE,
@@ -46,8 +48,32 @@ from lextrace.graph.intelligence_contracts import (
 )
 from lextrace.matter.analysis import MatterAnalyzer
 from lextrace.matter.contracts import ArgumentFinding, LegalClaim, Matter, MatterError
+from lextrace.matter.deep_research import (
+    assess_coverage,
+    claim_fingerprint,
+    propose_plan,
+)
 from lextrace.matter.documents import MAX_UPLOAD_BYTES
+from lextrace.matter.matrix import filter_matrix, matrix_csv, matrix_rows
+from lextrace.matter.red_team import (
+    attack_surface,
+)
+from lextrace.matter.research_contracts import (
+    AttackFinding,
+    AttackSurface,
+    DeepResearchPlan,
+    DeepResearchRun,
+    EvidenceMatrixRow,
+    ResearchCoverage,
+    ResearchStep,
+)
 from lextrace.matter.store import MatterStore
+from lextrace.matter.workflows import (
+    DeepResearchState,
+    RedTeamState,
+    deep_research_graph,
+    red_team_graph,
+)
 from lextrace.research.contracts import ResearchError, ResearchRequest
 from lextrace.research.llm import OpenAICompatibleLLM
 from lextrace.research.runtime import (
@@ -83,6 +109,16 @@ class MatterCreate(Record):
 class ClaimEdit(Record):
     normalized_proposition: str | None = None
     irrelevant: bool | None = None
+    wording_locked: bool | None = None
+
+
+class PlanEdit(Record):
+    steps: list[ResearchStep] | None = None
+    approve: bool = False
+    max_rounds: int | None = Field(default=None, ge=1, le=3)
+    max_queries_per_round: int | None = Field(default=None, ge=1, le=6)
+    max_total_results: int | None = Field(default=None, ge=1, le=60)
+    max_duration_seconds: int | None = Field(default=None, ge=1, le=300)
 
 
 class AuthorityEdit(Record):
@@ -138,6 +174,35 @@ def create_app(
         )
         return MatterAnalyzer(get_engine(), CachedStructuredLLM(provider, cache)), cache
 
+    def reanalyze_one_claim(
+        store: MatterStore,
+        analyzer: MatterAnalyzer,
+        matter_id: str,
+        claim_id: str,
+    ) -> None:
+        claim = store.claim(matter_id, claim_id)
+        if claim is None:
+            raise MatterError("Claim was not found.")
+        citations = store.analysis(matter_id, claim.document_id).citations
+        previous = store.finding(matter_id, claim_id)
+        finding = analyzer.analyze_claim(claim, citations)
+        if previous is not None:
+            reviews = {link.evidence_id: link for link in previous.cited_authorities}
+            for link in finding.cited_authorities:
+                reviewed = reviews.get(link.evidence_id)
+                if reviewed is not None:
+                    link.pinned = reviewed.pinned
+                    link.removed = reviewed.removed
+            if any(link.removed for link in finding.cited_authorities):
+                finding.verification_status = "INSUFFICIENT_EVIDENCE"
+                finding.vulnerability = "INSUFFICIENT_EVIDENCE"
+                finding.explanation = (
+                    "A reviewer removed an authority; recheck coverage."
+                )
+        claim.verification_state = finding.verification_status
+        store.update_claim(claim)
+        store.update_finding(finding)
+
     def submit_matter_analysis(
         matter_id: str, document_id: str, claim_id: str | None = None
     ) -> str:
@@ -171,31 +236,7 @@ def create_app(
                     )
                     store.save_analysis(result)
                 else:
-                    claim = store.claim(matter_id, claim_id)
-                    if claim is None:
-                        raise MatterError("Claim was not found.")
-                    citations = store.analysis(matter_id, document_id).citations
-                    previous = store.finding(matter_id, claim_id)
-                    finding = analyzer.analyze_claim(claim, citations)
-                    if previous is not None:
-                        reviews = {
-                            link.evidence_id: link
-                            for link in previous.cited_authorities
-                        }
-                        for link in finding.cited_authorities:
-                            reviewed = reviews.get(link.evidence_id)
-                            if reviewed is not None:
-                                link.pinned = reviewed.pinned
-                                link.removed = reviewed.removed
-                        if any(link.removed for link in finding.cited_authorities):
-                            finding.verification_status = "INSUFFICIENT_EVIDENCE"
-                            finding.vulnerability = "INSUFFICIENT_EVIDENCE"
-                            finding.explanation = (
-                                "A reviewer removed an authority; recheck coverage."
-                            )
-                    claim.verification_state = finding.verification_status
-                    store.update_claim(claim)
-                    store.update_finding(finding)
+                    reanalyze_one_claim(store, analyzer, matter_id, claim_id)
                 store.set_job(job_id, "completed")
             except MatterError as error:
                 code = (
@@ -434,7 +475,17 @@ def create_app(
         claim = store.claim(matter_id, claim_id)
         if claim is None:
             raise MatterError("Claim was not found.")
+        if (
+            request.wording_locked is not None
+            and request.normalized_proposition is None
+            and request.irrelevant is None
+        ):
+            return store.set_claim_lock(
+                matter_id, claim_id, request.wording_locked
+            ).model_dump(mode="json")
         if request.normalized_proposition is not None:
+            if claim.wording_locked:
+                raise MatterError("Claim wording is locked. Unlock it before editing.")
             proposition = request.normalized_proposition.strip()
             if not proposition or len(proposition) > 1000:
                 raise MatterError("Normalized proposition is invalid.")
@@ -442,6 +493,8 @@ def create_app(
             claim.manually_edited = True
         if request.irrelevant is not None:
             claim.irrelevant = request.irrelevant
+        if request.wording_locked is not None:
+            claim.wording_locked = request.wording_locked
         claim.verification_state = "INSUFFICIENT_EVIDENCE"
         store.update_claim(claim)
         return claim.model_dump(mode="json")
@@ -457,6 +510,46 @@ def create_app(
             "job_id": submit_matter_analysis(matter_id, claim.document_id, claim_id),
             "status": "queued",
         }
+
+    @application.post(
+        "/matters/{matter_id}/issues/{issue_id}/reanalyze", status_code=202
+    )
+    def reanalyze_issue(matter_id: str, issue_id: str) -> dict[str, str]:
+        store = get_matter_store()
+        if not any(issue.issue_id == issue_id for issue in store.all_issues(matter_id)):
+            raise MatterError("Issue was not found.")
+        claims = [
+            claim for claim in store.all_claims(matter_id) if claim.issue_id == issue_id
+        ]
+        if not claims:
+            raise MatterError("Issue has no claims to analyze.")
+        if len(claims) > 8:
+            raise MatterError("Issue exceeds the eight-claim rerun limit.")
+        if not matter_slots.acquire(blocking=False):
+            raise MatterError("Matter analysis queue is full.")
+        try:
+            job_id = store.create_job(matter_id, claims[0].document_id)
+
+            def perform() -> None:
+                private_cache: StructuredCache | None = None
+                try:
+                    store.set_job(job_id, "running")
+                    analyzer, private_cache = get_matter_analyzer(matter_id)
+                    for claim in claims:
+                        reanalyze_one_claim(store, analyzer, matter_id, claim.claim_id)
+                    store.set_job(job_id, "completed")
+                except Exception:
+                    store.set_job(job_id, "failed", "ISSUE_REANALYSIS_FAILED")
+                finally:
+                    if private_cache is not None:
+                        private_cache.close()
+                    matter_slots.release()
+
+            matter_executor.submit(perform)
+        except Exception:
+            matter_slots.release()
+            raise
+        return {"job_id": job_id, "status": "queued"}
 
     @application.patch("/matters/{matter_id}/claims/{claim_id}/authorities/{case_id}")
     def edit_authority(
@@ -802,6 +895,413 @@ def create_app(
     ) -> TreatmentAnnotation:
         return get_matter_store().review_treatment(
             matter_id, claim_id, annotation_id, request.state
+        )
+
+    def research_context(
+        matter_id: str, claim_id: str
+    ) -> tuple[Matter, LegalClaim, ArgumentFinding]:
+        return claim_context(matter_id, claim_id)
+
+    def research_identity(
+        matter: Matter, claim: LegalClaim, finding: ArgumentFinding
+    ) -> str:
+        source_versions: list[str] = []
+        for root in (
+            index_path or configured.index_path,
+            graph_path or configured.graph_path,
+        ):
+            metadata = root / "metadata.json" if root is not None else None
+            if metadata is not None and metadata.is_file():
+                try:
+                    source_versions.append(
+                        hashlib.sha256(metadata.read_bytes()).hexdigest()
+                    )
+                except OSError:
+                    source_versions.append("unavailable")
+            else:
+                source_versions.append("unavailable")
+        return hashlib.sha256(
+            json.dumps(
+                {
+                    "version": "matter-research-v2",
+                    "claim": claim_fingerprint(claim),
+                    "evidence": hashlib.sha256(
+                        finding.model_dump_json().encode()
+                    ).hexdigest(),
+                    "forum": matter.court,
+                    "as_of_date": str(matter.as_of_date),
+                    "model": configured.llm_model,
+                    "sources": source_versions,
+                },
+                sort_keys=True,
+            ).encode()
+        ).hexdigest()
+
+    @application.get(
+        "/matters/{matter_id}/claims/{claim_id}/research-coverage",
+        response_model=ResearchCoverage,
+    )
+    def claim_research_coverage(matter_id: str, claim_id: str) -> ResearchCoverage:
+        matter, claim, finding = research_context(matter_id, claim_id)
+        store = get_matter_store()
+        cached = store.research_coverage(claim_id)
+        identity = research_identity(matter, claim, finding)
+        if cached is not None and cached.cache_identity == identity:
+            return cached
+        latest = store.latest_research_run(matter_id, claim_id)
+        coverage = assess_coverage(
+            matter,
+            claim,
+            finding,
+            latest.discoveries if latest else [],
+            queries_executed=sum(len(r.queries) for r in latest.rounds)
+            if latest
+            else 0,
+        )
+        coverage.cache_identity = identity
+        store.save_research_coverage(coverage)
+        return coverage
+
+    @application.post(
+        "/matters/{matter_id}/claims/{claim_id}/research-plan",
+        response_model=DeepResearchPlan,
+    )
+    def create_research_plan(matter_id: str, claim_id: str) -> DeepResearchPlan:
+        matter, claim, _ = research_context(matter_id, claim_id)
+        coverage = claim_research_coverage(matter_id, claim_id)
+        plan = propose_plan(matter, claim, coverage)
+        plan.context_identity = coverage.cache_identity
+        get_matter_store().save_research_plan(plan)
+        return plan
+
+    @application.get(
+        "/matters/{matter_id}/claims/{claim_id}/research-plan",
+        response_model=DeepResearchPlan,
+    )
+    def get_research_plan(matter_id: str, claim_id: str) -> DeepResearchPlan:
+        plan = get_matter_store().research_plan(matter_id, claim_id)
+        if plan is None:
+            raise MatterError("Research plan was not found.")
+        return plan
+
+    @application.patch(
+        "/matters/{matter_id}/claims/{claim_id}/research-plan",
+        response_model=DeepResearchPlan,
+    )
+    def edit_research_plan(
+        matter_id: str, claim_id: str, request: PlanEdit
+    ) -> DeepResearchPlan:
+        store = get_matter_store()
+        plan = store.research_plan(matter_id, claim_id)
+        claim = store.claim(matter_id, claim_id)
+        if plan is None or claim is None:
+            raise MatterError("Research plan was not found.")
+        if plan.status in {"RUNNING", "COMPLETED"}:
+            raise MatterError("Running or completed plan cannot be edited.")
+        if (
+            plan.claim_fingerprint != claim_fingerprint(claim)
+            or plan.context_identity
+            != claim_research_coverage(matter_id, claim_id).cache_identity
+        ):
+            raise MatterError("Research plan is stale. Create a new plan.")
+        if request.steps is not None:
+            if len(request.steps) > 12 or any(
+                step.claim_id != claim_id
+                or not any(
+                    gap.gap_id == step.gap_id
+                    for gap in claim_research_coverage(matter_id, claim_id).gaps
+                )
+                for step in request.steps
+            ):
+                raise MatterError("Research steps must reference current claim gaps.")
+            plan.steps = request.steps
+        for key in (
+            "max_rounds",
+            "max_queries_per_round",
+            "max_total_results",
+            "max_duration_seconds",
+        ):
+            value = getattr(request, key)
+            if value is not None:
+                setattr(plan, key, value)
+        plan.status = "APPROVED" if request.approve else "DRAFT"
+        store.save_research_plan(plan)
+        return plan
+
+    @application.post(
+        "/matters/{matter_id}/claims/{claim_id}/deep-research",
+        status_code=202,
+        response_model=RunAccepted,
+    )
+    def start_deep_research(
+        matter_id: str, claim_id: str, gap_id: str | None = None
+    ) -> RunAccepted:
+        matter, claim, finding = research_context(matter_id, claim_id)
+        store = get_matter_store()
+        plan = store.research_plan(matter_id, claim_id)
+        if plan is None or plan.status != "APPROVED":
+            raise MatterError("Approve a research plan before running it.")
+        if (
+            plan.claim_fingerprint != claim_fingerprint(claim)
+            or plan.context_identity
+            != claim_research_coverage(matter_id, claim_id).cache_identity
+        ):
+            raise MatterError("Research plan is stale. Create a new plan.")
+        execution_plan = plan
+        if gap_id is not None:
+            selected = [
+                step for step in plan.steps if step.gap_id == gap_id and step.approved
+            ]
+            if not selected:
+                raise MatterError("Approved research gap was not found.")
+            execution_plan = plan.model_copy(update={"steps": selected})
+        if not matter_slots.acquire(blocking=False):
+            raise MatterError("Matter analysis queue is full.")
+        run = DeepResearchRun(
+            run_id=uuid.uuid4().hex,
+            plan_id=plan.plan_id,
+            matter_id=matter_id,
+            claim_id=claim_id,
+            status="queued",
+        )
+        try:
+            store.save_research_run(run)
+            plan.status = "RUNNING"
+            store.save_research_plan(plan)
+
+            def perform() -> None:
+                try:
+                    run.status = "running"
+                    run.started_at = datetime.now(UTC)
+                    store.save_research_run(run)
+                    approved = execution_plan.model_copy(update={"status": "APPROVED"})
+                    state = cast(
+                        DeepResearchState,
+                        deep_research_graph(
+                            get_engine(),
+                            progress=store.save_research_run,
+                            stopped=lambda: (
+                                (current := store.research_run(matter_id, run.run_id))
+                                is not None
+                                and current.status == "stopped"
+                            ),
+                        ).invoke(
+                            {
+                                "matter": matter,
+                                "claim": claim,
+                                "finding": finding,
+                                "plan": approved,
+                                "run": run,
+                                "coverage": None,
+                            }
+                        ),
+                    )
+                    store.save_research_run(state["run"])
+                    if state["run"].coverage is not None:
+                        state["run"].coverage.cache_identity = research_identity(
+                            matter, claim, finding
+                        )
+                        store.save_research_coverage(state["run"].coverage)
+                    plan.status = (
+                        "STOPPED"
+                        if state["run"].stop_reason == "STOPPED"
+                        else "COMPLETED"
+                    )
+                    store.save_research_plan(plan)
+                except Exception:
+                    run.status = "failed"
+                    run.stop_reason = "ERROR"
+                    run.warning = (
+                        "Research failed; no private request content was logged."
+                    )
+                    run.completed_at = datetime.now(UTC)
+                    store.save_research_run(run)
+                    plan.status = "STOPPED"
+                    store.save_research_plan(plan)
+                finally:
+                    matter_slots.release()
+
+            matter_executor.submit(perform)
+        except Exception:
+            matter_slots.release()
+            raise
+        return RunAccepted(run_id=run.run_id)
+
+    @application.get(
+        "/matters/{matter_id}/research-runs/{run_id}",
+        response_model=DeepResearchRun,
+    )
+    def get_deep_research_run(matter_id: str, run_id: str) -> DeepResearchRun:
+        run = get_matter_store().research_run(matter_id, run_id)
+        if run is None:
+            raise MatterError("Research run was not found.")
+        return run
+
+    @application.post(
+        "/matters/{matter_id}/research-runs/{run_id}/stop",
+        response_model=DeepResearchRun,
+    )
+    def stop_deep_research(matter_id: str, run_id: str) -> DeepResearchRun:
+        store = get_matter_store()
+        run = store.research_run(matter_id, run_id)
+        if run is None:
+            raise MatterError("Research run was not found.")
+        if run.status in {"queued", "running"}:
+            run.status = "stopped"
+            run.stop_reason = "STOPPED"
+            store.save_research_run(run)
+        return run
+
+    @application.get(
+        "/matters/{matter_id}/claims/{claim_id}/attacks",
+        response_model=list[AttackFinding],
+    )
+    def claim_attacks(matter_id: str, claim_id: str) -> list[AttackFinding]:
+        if get_matter_store().claim(matter_id, claim_id) is None:
+            raise MatterError("Claim was not found.")
+        return get_matter_store().attacks(matter_id, claim_id)
+
+    @application.post(
+        "/matters/{matter_id}/claims/{claim_id}/red-team",
+        status_code=202,
+    )
+    def start_red_team(matter_id: str, claim_id: str) -> dict[str, str]:
+        matter, claim, finding = research_context(matter_id, claim_id)
+        store = get_matter_store()
+        if not matter_slots.acquire(blocking=False):
+            raise MatterError("Matter analysis queue is full.")
+        try:
+            job_id = store.create_job(matter_id, claim.document_id, claim_id)
+            red_run = DeepResearchRun(
+                run_id=job_id,
+                plan_id="red-team",
+                matter_id=matter_id,
+                claim_id=claim_id,
+                status="queued",
+            )
+            store.save_research_run(red_run)
+
+            def perform() -> None:
+                private_cache: StructuredCache | None = None
+                started = time.monotonic()
+                try:
+                    store.set_job(job_id, "running")
+                    red_run.status = "running"
+                    red_run.started_at = datetime.now(UTC)
+                    store.save_research_run(red_run)
+                    coverage = claim_research_coverage(matter_id, claim_id)
+                    verifier = None
+                    if configured.llm_model:
+                        analyzer, private_cache = get_matter_analyzer(matter_id)
+                        verifier = cast(CachedStructuredLLM, analyzer.llm)
+                    state = cast(
+                        RedTeamState,
+                        red_team_graph(get_engine(), llm=verifier).invoke(
+                            {
+                                "matter": matter,
+                                "claim": claim,
+                                "finding": finding,
+                                "coverage": coverage,
+                                "run": red_run,
+                                "sections": store.sections(
+                                    matter_id, claim.document_id
+                                ),
+                                "doctrine": store.latest_doctrine(matter_id, claim_id),
+                                "attacks": [],
+                            }
+                        ),
+                    )
+                    store.save_attacks(
+                        matter_id,
+                        claim_id,
+                        state["attacks"],
+                    )
+                    state["run"].status = "completed"
+                    state["run"].completed_at = datetime.now(UTC)
+                    state["run"].elapsed_ms = int((time.monotonic() - started) * 1000)
+                    state["run"].attack_hypotheses = len(state["attacks"])
+                    state["run"].verified_attacks = sum(
+                        attack.verified for attack in state["attacks"]
+                    )
+                    state["run"].unverified_attacks = sum(
+                        not attack.verified for attack in state["attacks"]
+                    )
+                    if verifier is not None:
+                        state["run"].cache_hits = verifier.hits
+                        state["run"].llm_calls = verifier.usage.calls
+                        state["run"].input_tokens = verifier.usage.input_tokens
+                        state["run"].output_tokens = verifier.usage.output_tokens
+                    store.save_research_run(state["run"])
+                    store.set_job(job_id, "completed")
+                except Exception:
+                    red_run.status = "failed"
+                    red_run.stop_reason = "ERROR"
+                    red_run.warning = "Red Team research failed."
+                    red_run.completed_at = datetime.now(UTC)
+                    red_run.elapsed_ms = int((time.monotonic() - started) * 1000)
+                    store.save_research_run(red_run)
+                    store.set_job(job_id, "failed", "RED_TEAM_FAILED")
+                finally:
+                    if private_cache is not None:
+                        private_cache.close()
+                    matter_slots.release()
+
+            matter_executor.submit(perform)
+        except Exception:
+            matter_slots.release()
+            raise
+        return {"job_id": job_id, "status": "queued"}
+
+    @application.get(
+        "/matters/{matter_id}/attack-surface", response_model=AttackSurface
+    )
+    def matter_attack_surface(matter_id: str) -> AttackSurface:
+        if get_matter_store().get_matter(matter_id) is None:
+            raise MatterError("Matter was not found.")
+        return attack_surface(matter_id, get_matter_store().attacks(matter_id))
+
+    @application.get(
+        "/matters/{matter_id}/evidence-matrix", response_model=list[EvidenceMatrixRow]
+    )
+    def evidence_matrix(
+        matter_id: str,
+        issue: str | None = None,
+        status: str | None = None,
+        authority: str | None = None,
+        citation_support: str | None = None,
+        coverage: str | None = None,
+        severity: str | None = None,
+        unresolved_only: bool = False,
+        document: str | None = None,
+        sort: Literal[
+            "vulnerability", "coverage", "issue", "authority", "importance"
+        ] = "vulnerability",
+    ) -> list[EvidenceMatrixRow]:
+        return filter_matrix(
+            matrix_rows(get_matter_store(), matter_id),
+            issue=issue,
+            status=status,
+            authority=authority,
+            citation_support=citation_support,
+            coverage=coverage,
+            severity=severity,
+            unresolved_only=unresolved_only,
+            document=document,
+            sort=sort,
+        )
+
+    @application.get("/matters/{matter_id}/evidence-matrix.csv")
+    def evidence_matrix_export(matter_id: str) -> Response:
+        store = get_matter_store()
+        matter = store.get_matter(matter_id)
+        if matter is None:
+            raise MatterError("Matter was not found.")
+        return Response(
+            content=matrix_csv(matrix_rows(store, matter_id), matter.name),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": 'attachment; filename="evidence-matrix.csv"'
+            },
         )
 
     return application
