@@ -254,3 +254,13 @@ that an opinion governs a particular issue. `graph/intelligence.py` reuses the
 existing graph and paragraph passage IDs. It reports unrecoverable contexts and
 local-corpus gaps instead of inferring treatment from bare citations. See
 [precedent intelligence documentation](v2-precedent-intelligence.md).
+
+## Living Matters monitoring v1
+
+Private Matter claims and authorities become bounded monitoring targets. An old
+and new normalized Case snapshot produce a deterministic corpus delta; locally
+available graph edges and BM25 propose candidates, exact passages ground change
+events, and verified impacts create deduplicated alerts. Lawyer review controls
+whether an assessed change is applied to one claim. The local API runs checks in
+the background; no-change is a valid outcome. See [monitoring documentation](v2-living-matters.md)
+for versioning, rebuild behavior, evidence requirements, and current limits.

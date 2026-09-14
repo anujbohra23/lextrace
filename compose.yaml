@@ -14,6 +14,7 @@ services:
       LEXTRACE_CORS_ORIGINS: http://localhost:3000
     volumes:
       - ./artifacts:/app/artifacts:ro
+      - ./data:/app/data:ro
       - lextrace-runtime:/app/runtime
       - lextrace-models:/home/lextrace/.cache
     ports: ["8000:8000"]

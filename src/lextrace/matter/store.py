@@ -27,6 +27,16 @@ from lextrace.matter.documents import (
     safe_filename,
     segment_document,
 )
+from lextrace.matter.monitoring_contracts import (
+    ChangeEvent,
+    ChangeImpact,
+    MatterAlert,
+    MonitoringPolicy,
+    MonitoringRun,
+    MonitoringTarget,
+    ReviewState,
+    TargetType,
+)
 from lextrace.matter.research_contracts import (
     AttackFinding,
     DeepResearchPlan,
@@ -134,6 +144,28 @@ class MatterStore:
                   id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, claim_id TEXT NOT NULL,
                   payload TEXT NOT NULL,
                   FOREIGN KEY(claim_id) REFERENCES matter_claims(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS monitoring_policies_v1 (
+                  matter_id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+                  FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS monitoring_targets_v1 (
+                  id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, payload TEXT NOT NULL,
+                  FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE INDEX IF NOT EXISTS monitoring_targets_matter_v1
+                  ON monitoring_targets_v1(matter_id);
+                CREATE TABLE IF NOT EXISTS monitoring_runs_v1 (
+                  id TEXT PRIMARY KEY, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS monitoring_events_v1 (
+                  id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, payload TEXT NOT NULL,
+                  FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS monitoring_impacts_v1 (
+                  id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, payload TEXT NOT NULL,
+                  FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE TABLE IF NOT EXISTS monitoring_alerts_v1 (
+                  id TEXT PRIMARY KEY, matter_id TEXT NOT NULL, claim_id TEXT NOT NULL,
+                  payload TEXT NOT NULL,
+                  FOREIGN KEY(matter_id) REFERENCES matters(id) ON DELETE CASCADE);
+                CREATE INDEX IF NOT EXISTS monitoring_alerts_matter_v1
+                  ON monitoring_alerts_v1(matter_id);
                 """
             )
 
@@ -775,3 +807,262 @@ class MatterStore:
                 (_id(matter_id), _id(job_id)),
             ).fetchone()
         return dict(row) if row else None
+
+    def monitoring_policy(self, matter_id: str) -> MonitoringPolicy:
+        if self.get_matter(matter_id) is None:
+            raise MatterError("Matter was not found.")
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM monitoring_policies_v1 WHERE matter_id=?",
+                (matter_id,),
+            ).fetchone()
+        return (
+            MonitoringPolicy.model_validate_json(row[0]) if row else MonitoringPolicy()
+        )
+
+    def save_monitoring_policy(
+        self, matter_id: str, policy: MonitoringPolicy
+    ) -> MonitoringPolicy:
+        if self.get_matter(matter_id) is None:
+            raise MatterError("Matter was not found.")
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO monitoring_policies_v1 VALUES (?,?)",
+                (matter_id, policy.model_dump_json()),
+            )
+        return policy
+
+    def monitoring_targets(self, matter_id: str) -> list[MonitoringTarget]:
+        if self.get_matter(matter_id) is None:
+            raise MatterError("Matter was not found.")
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM monitoring_targets_v1 "
+                "WHERE matter_id=? ORDER BY id",
+                (matter_id,),
+            ).fetchall()
+        return [MonitoringTarget.model_validate_json(row[0]) for row in rows]
+
+    def monitoring_target(
+        self, matter_id: str, target_id: str
+    ) -> MonitoringTarget | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM monitoring_targets_v1 WHERE matter_id=? AND id=?",
+                (_id(matter_id), _id(target_id)),
+            ).fetchone()
+        return MonitoringTarget.model_validate_json(row[0]) if row else None
+
+    def add_monitoring_target(
+        self,
+        matter_id: str,
+        target_type: TargetType,
+        reference_id: str,
+        *,
+        automatic: bool = False,
+        scope: MonitoringPolicy | None = None,
+    ) -> MonitoringTarget:
+        matter = self.get_matter(matter_id)
+        if matter is None:
+            raise MatterError("Matter was not found.")
+        valid = (
+            reference_id == matter_id
+            if target_type == "MATTER"
+            else self.claim(matter_id, reference_id) is not None
+            if target_type in {"CLAIM", "DOCTRINE"}
+            else any(i.issue_id == reference_id for i in self.all_issues(matter_id))
+            if target_type == "ISSUE"
+            else reference_id.isascii()
+            and reference_id.isdecimal()
+            and any(
+                evidence.result.case_id == reference_id
+                for claim in self.all_claims(matter_id)
+                for finding in [self.finding(matter_id, claim.claim_id)]
+                if finding is not None
+                for evidence in finding.evidence
+            )
+        )
+        if not valid:
+            raise MatterError("Monitoring target reference was not found.")
+        identifier = hashlib.sha256(
+            f"{matter_id}:{target_type}:{reference_id}".encode()
+        ).hexdigest()[:32]
+        previous = self.monitoring_target(matter_id, identifier)
+        if previous is not None:
+            return previous
+        now = _now()
+        target = MonitoringTarget(
+            target_id=identifier,
+            matter_id=matter_id,
+            target_type=target_type,
+            target_reference_id=reference_id,
+            automatic=automatic,
+            created_at=now,
+            updated_at=now,
+            as_of_date=matter.as_of_date,
+            monitoring_scope=scope or self.monitoring_policy(matter_id),
+        )
+        self.save_monitoring_target(target)
+        return target
+
+    def save_monitoring_target(self, target: MonitoringTarget) -> None:
+        if self.get_matter(target.matter_id) is None:
+            raise MatterError("Matter was not found.")
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO monitoring_targets_v1 VALUES (?,?,?)",
+                (target.target_id, target.matter_id, target.model_dump_json()),
+            )
+
+    def delete_monitoring_target(self, matter_id: str, target_id: str) -> bool:
+        with self._lock, self._db:
+            return bool(
+                self._db.execute(
+                    "DELETE FROM monitoring_targets_v1 WHERE matter_id=? AND id=?",
+                    (_id(matter_id), _id(target_id)),
+                ).rowcount
+            )
+
+    def ensure_automatic_monitoring_targets(
+        self, matter_id: str
+    ) -> list[MonitoringTarget]:
+        """Watch selected high-value claims; automatic choices remain editable."""
+        selected = []
+        for claim in self.all_claims(matter_id):
+            if claim.irrelevant:
+                continue
+            coverage = self.research_coverage(claim.claim_id)
+            finding = self.finding(matter_id, claim.claim_id)
+            if (
+                claim.importance == "high"
+                or coverage is not None
+                and any(not gap.resolved for gap in coverage.gaps)
+                or finding is not None
+                and any(link.pinned for link in finding.cited_authorities)
+            ):
+                selected.append(
+                    self.add_monitoring_target(
+                        matter_id, "CLAIM", claim.claim_id, automatic=True
+                    )
+                )
+        return selected
+
+    def save_monitoring_run(self, run: MonitoringRun) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO monitoring_runs_v1 VALUES (?,?)",
+                (run.run_id, run.model_dump_json()),
+            )
+
+    def monitoring_run(self, run_id: str) -> MonitoringRun | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM monitoring_runs_v1 WHERE id=?", (_id(run_id),)
+            ).fetchone()
+        return MonitoringRun.model_validate_json(row[0]) if row else None
+
+    def matter_monitoring_runs(self, matter_id: str) -> list[MonitoringRun]:
+        _id(matter_id)
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM monitoring_runs_v1 ORDER BY rowid DESC LIMIT 100"
+            ).fetchall()
+        return [
+            run
+            for row in rows
+            if matter_id
+            in (run := MonitoringRun.model_validate_json(row[0])).matter_ids
+        ][:20]
+
+    def save_change_event(self, event: ChangeEvent) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO monitoring_events_v1 VALUES (?,?,?)",
+                (event.event_id, event.matter_id, event.model_dump_json()),
+            )
+
+    def change_event(self, matter_id: str, event_id: str) -> ChangeEvent | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM monitoring_events_v1 WHERE matter_id=? AND id=?",
+                (_id(matter_id), _id(event_id)),
+            ).fetchone()
+        return ChangeEvent.model_validate_json(row[0]) if row else None
+
+    def save_change_impact(self, impact: ChangeImpact) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO monitoring_impacts_v1 VALUES (?,?,?)",
+                (impact.impact_id, impact.matter_id, impact.model_dump_json()),
+            )
+
+    def change_impact(self, matter_id: str, impact_id: str) -> ChangeImpact | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM monitoring_impacts_v1 WHERE matter_id=? AND id=?",
+                (_id(matter_id), _id(impact_id)),
+            ).fetchone()
+        return ChangeImpact.model_validate_json(row[0]) if row else None
+
+    def save_matter_alert(self, alert: MatterAlert) -> MatterAlert:
+        previous = self.matter_alert(alert.matter_id, alert.alert_id)
+        if previous is not None:
+            if previous.impact_id == alert.impact_id:
+                return previous
+            alert.version = previous.version + 1
+            alert.review_state = previous.review_state
+            alert.created_at = previous.created_at
+        with self._lock, self._db:
+            self._db.execute(
+                "INSERT OR REPLACE INTO monitoring_alerts_v1 VALUES (?,?,?,?)",
+                (
+                    alert.alert_id,
+                    alert.matter_id,
+                    alert.claim_id,
+                    alert.model_dump_json(),
+                ),
+            )
+        return alert
+
+    def matter_alert(self, matter_id: str, alert_id: str) -> MatterAlert | None:
+        with self._lock:
+            row = self._db.execute(
+                "SELECT payload FROM monitoring_alerts_v1 WHERE matter_id=? AND id=?",
+                (_id(matter_id), _id(alert_id)),
+            ).fetchone()
+        return MatterAlert.model_validate_json(row[0]) if row else None
+
+    def matter_alerts(self, matter_id: str) -> list[MatterAlert]:
+        _id(matter_id)
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT payload FROM monitoring_alerts_v1 "
+                "WHERE matter_id=? ORDER BY rowid DESC",
+                (matter_id,),
+            ).fetchall()
+        return [MatterAlert.model_validate_json(row[0]) for row in rows]
+
+    def review_matter_alert(
+        self,
+        matter_id: str,
+        alert_id: str,
+        state: ReviewState,
+        *,
+        snoozed_until: date | None = None,
+    ) -> MatterAlert:
+        alert = self.matter_alert(matter_id, alert_id)
+        if alert is None:
+            raise MatterError("Matter alert was not found.")
+        if state == "SNOOZED" and (
+            snoozed_until is None or snoozed_until <= date.today()
+        ):
+            raise MatterError("Snooze date must be in the future.")
+        alert.review_state = state
+        alert.snoozed_until = snoozed_until if state == "SNOOZED" else None
+        alert.updated_at = _now()
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE monitoring_alerts_v1 SET payload=? WHERE matter_id=? AND id=?",
+                (alert.model_dump_json(), matter_id, alert_id),
+            )
+        return alert

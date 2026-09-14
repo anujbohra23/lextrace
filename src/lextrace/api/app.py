@@ -46,6 +46,7 @@ from lextrace.graph.intelligence_contracts import (
     PrecedentTrace,
     TreatmentAnnotation,
 )
+from lextrace.graph.store import CitationGraph
 from lextrace.matter.analysis import MatterAnalyzer
 from lextrace.matter.contracts import ArgumentFinding, LegalClaim, Matter, MatterError
 from lextrace.matter.deep_research import (
@@ -55,6 +56,18 @@ from lextrace.matter.deep_research import (
 )
 from lextrace.matter.documents import MAX_UPLOAD_BYTES
 from lextrace.matter.matrix import filter_matrix, matrix_csv, matrix_rows
+from lextrace.matter.monitoring import MonitorService, apply_alert
+from lextrace.matter.monitoring_contracts import (
+    MatterAlert,
+    MonitoringLimits,
+    MonitoringOverview,
+    MonitoringPolicy,
+    MonitoringRun,
+    MonitoringTarget,
+    ReviewState,
+    TargetType,
+)
+from lextrace.matter.monitoring_corpus import corpus_version
 from lextrace.matter.red_team import (
     attack_surface,
 )
@@ -89,6 +102,7 @@ from lextrace.retrieval.contracts import (
     SearchRequest,
     SearchResponse,
 )
+from lextrace.retrieval.documents import Corpus
 from lextrace.retrieval.engine import LexTraceRetriever
 
 
@@ -131,6 +145,29 @@ class TreatmentReview(Record):
     state: Literal["CONFIRMED", "REJECTED", "UNCERTAIN"]
 
 
+class MonitoringTargetCreate(Record):
+    target_type: TargetType
+    target_reference_id: str
+    monitoring_scope: MonitoringPolicy | None = None
+
+
+class MonitoringTargetEdit(Record):
+    enabled: bool | None = None
+    monitoring_scope: MonitoringPolicy | None = None
+
+
+class MonitoringRunRequest(Record):
+    new_corpus_path: str
+    new_graph_path: str | None = None
+    matter_ids: list[str] | None = None
+    limits: MonitoringLimits = Field(default_factory=MonitoringLimits)
+
+
+class MonitoringAlertEdit(Record):
+    state: ReviewState
+    snoozed_until: date | None = None
+
+
 def create_app(
     retriever: LexTraceRetriever | None = None,
     *,
@@ -148,6 +185,8 @@ def create_app(
     matter_store: MatterStore | None = None
     matter_executor = ThreadPoolExecutor(max_workers=1)
     matter_slots = threading.BoundedSemaphore(3)
+    monitoring_executor = ThreadPoolExecutor(max_workers=1)
+    monitoring_slots = threading.BoundedSemaphore(1)
 
     def get_matter_store() -> MatterStore:
         nonlocal matter_store
@@ -323,6 +362,7 @@ def create_app(
         if engine is not None:
             engine.close()
         matter_executor.shutdown(wait=True)
+        monitoring_executor.shutdown(wait=True)
         if matter_store is not None:
             matter_store.close()
 
@@ -1303,6 +1343,192 @@ def create_app(
                 "Content-Disposition": 'attachment; filename="evidence-matrix.csv"'
             },
         )
+
+    @application.get(
+        "/matters/{matter_id}/monitoring", response_model=MonitoringOverview
+    )
+    def monitoring_overview(matter_id: str) -> MonitoringOverview:
+        store = get_matter_store()
+        store.ensure_automatic_monitoring_targets(matter_id)
+        alerts = store.matter_alerts(matter_id)
+        return MonitoringOverview(
+            matter_id=matter_id,
+            policy=store.monitoring_policy(matter_id),
+            targets=store.monitoring_targets(matter_id),
+            recent_runs=store.matter_monitoring_runs(matter_id),
+            alert_count=len(alerts),
+            unread_alert_count=sum(a.review_state == "UNREAD" for a in alerts),
+        )
+
+    @application.patch(
+        "/matters/{matter_id}/monitoring/policy", response_model=MonitoringPolicy
+    )
+    def update_monitoring_policy(
+        matter_id: str, policy: MonitoringPolicy
+    ) -> MonitoringPolicy:
+        return get_matter_store().save_monitoring_policy(matter_id, policy)
+
+    @application.post(
+        "/matters/{matter_id}/monitoring/targets",
+        response_model=MonitoringTarget,
+        status_code=201,
+    )
+    def create_monitoring_target(
+        matter_id: str, request: MonitoringTargetCreate
+    ) -> MonitoringTarget:
+        return get_matter_store().add_monitoring_target(
+            matter_id,
+            request.target_type,
+            request.target_reference_id,
+            scope=request.monitoring_scope,
+        )
+
+    @application.patch(
+        "/matters/{matter_id}/monitoring/targets/{target_id}",
+        response_model=MonitoringTarget,
+    )
+    def edit_monitoring_target(
+        matter_id: str, target_id: str, request: MonitoringTargetEdit
+    ) -> MonitoringTarget:
+        store = get_matter_store()
+        target = store.monitoring_target(matter_id, target_id)
+        if target is None:
+            raise MatterError("Monitoring target was not found.")
+        if request.enabled is not None:
+            target.enabled = request.enabled
+        if request.monitoring_scope is not None:
+            target.monitoring_scope = request.monitoring_scope
+        target.updated_at = datetime.now(UTC)
+        store.save_monitoring_target(target)
+        return target
+
+    @application.delete(
+        "/matters/{matter_id}/monitoring/targets/{target_id}",
+        status_code=204,
+    )
+    def remove_monitoring_target(matter_id: str, target_id: str) -> Response:
+        if not get_matter_store().delete_monitoring_target(matter_id, target_id):
+            raise MatterError("Monitoring target was not found.")
+        return Response(status_code=204)
+
+    @application.post("/monitoring/run", response_model=RunAccepted, status_code=202)
+    def start_monitoring(request: MonitoringRunRequest) -> RunAccepted:
+        corpus_path = Path(request.new_corpus_path).resolve()
+        if (
+            not corpus_path.is_relative_to(Path("data").resolve())
+            or corpus_path.suffix != ".jsonl"
+        ):
+            raise MatterError("Monitoring corpus must be a JSONL file under data/.")
+        try:
+            new_corpus = Corpus.load(corpus_path)
+        except RetrievalError:
+            raise MatterError("Monitoring corpus is invalid or unavailable.") from None
+        graph_source: Path | None = None
+        if request.new_graph_path is not None:
+            graph_source = Path(request.new_graph_path).resolve()
+            if not graph_source.is_relative_to(Path("artifacts/graphs").resolve()):
+                raise MatterError("Monitoring graph must be under artifacts/graphs/.")
+        store = get_matter_store()
+        old_engine = get_engine()
+        selected = request.matter_ids or [m.matter_id for m in store.list_matters()]
+        if any(store.get_matter(matter_id) is None for matter_id in selected):
+            raise MatterError("Matter was not found.")
+        run = MonitoringRun(
+            run_id=uuid.uuid4().hex,
+            old_corpus=corpus_version(old_engine.corpus),
+            new_corpus=corpus_version(new_corpus),
+            matter_ids=selected,
+        )
+        if not monitoring_slots.acquire(blocking=False):
+            raise MatterError("Monitoring queue is full.")
+        store.save_monitoring_run(run)
+
+        def perform() -> None:
+            new_graph: CitationGraph | None = None
+            try:
+                if graph_source is not None:
+                    new_graph = CitationGraph(graph_source)
+                MonitorService(
+                    store,
+                    old_engine.corpus,
+                    new_corpus,
+                    old_graph=old_engine.graph,
+                    new_graph=new_graph,
+                    limits=request.limits,
+                ).run(selected, run_id=run.run_id)
+            except Exception:
+                run.status = "failed"
+                run.outcome = "FAILED"
+                run.completed_at = datetime.now(UTC)
+                run.errors = ["Monitoring failed; private content was not logged."]
+                store.save_monitoring_run(run)
+            finally:
+                if new_graph is not None:
+                    new_graph.close()
+                monitoring_slots.release()
+
+        try:
+            monitoring_executor.submit(perform)
+        except RuntimeError:
+            monitoring_slots.release()
+            run.status = "failed"
+            run.outcome = "FAILED"
+            store.save_monitoring_run(run)
+            raise MatterError("Monitoring queue is unavailable.") from None
+        return RunAccepted(run_id=run.run_id)
+
+    @application.get("/monitoring/runs/{run_id}", response_model=MonitoringRun)
+    def monitoring_run_status(run_id: str) -> MonitoringRun:
+        run = get_matter_store().monitoring_run(run_id)
+        if run is None:
+            raise MatterError("Monitoring run was not found.")
+        return run
+
+    @application.get("/matters/{matter_id}/alerts", response_model=list[MatterAlert])
+    def monitoring_alerts(matter_id: str) -> list[MatterAlert]:
+        store = get_matter_store()
+        if store.get_matter(matter_id) is None:
+            raise MatterError("Matter was not found.")
+        return store.matter_alerts(matter_id)
+
+    @application.get("/matters/{matter_id}/alerts/{alert_id}")
+    def monitoring_alert_detail(matter_id: str, alert_id: str) -> dict[str, object]:
+        store = get_matter_store()
+        alert = store.matter_alert(matter_id, alert_id)
+        if alert is None:
+            raise MatterError("Matter alert was not found.")
+        return {
+            "alert": alert,
+            "event": store.change_event(matter_id, alert.event_id),
+            "impact": store.change_impact(matter_id, alert.impact_id),
+        }
+
+    @application.patch(
+        "/matters/{matter_id}/alerts/{alert_id}", response_model=MatterAlert
+    )
+    def edit_monitoring_alert(
+        matter_id: str, alert_id: str, request: MonitoringAlertEdit
+    ) -> MatterAlert:
+        return get_matter_store().review_matter_alert(
+            matter_id, alert_id, request.state, snoozed_until=request.snoozed_until
+        )
+
+    @application.post(
+        "/matters/{matter_id}/alerts/{alert_id}/apply", response_model=MatterAlert
+    )
+    def apply_monitoring_alert(matter_id: str, alert_id: str) -> MatterAlert:
+        return apply_alert(get_matter_store(), matter_id, alert_id)
+
+    @application.post(
+        "/matters/{matter_id}/alerts/{alert_id}/deep-research",
+        response_model=RunAccepted,
+        status_code=202,
+    )
+    def research_monitoring_alert(matter_id: str, alert_id: str) -> RunAccepted:
+        alert = get_matter_store().matter_alert(matter_id, alert_id)
+        if alert is None:
+            raise MatterError("Matter alert was not found.")
+        return start_deep_research(matter_id, alert.claim_id)
 
     return application
 

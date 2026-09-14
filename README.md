@@ -393,6 +393,10 @@ lextrace search "attorney advertising" --mode citation_reranked \
 ```
 
 The source reuses validated `CitationEvidence` and `OpinionMapping` records.
+
+Living Matters monitoring compares prepared local Case snapshots and surfaces
+evidence-backed, reviewable alerts. See [monitoring v1](docs/v2-living-matters.md)
+for the `update-corpus` workflow, API, limits, and review rules.
 Opinion IDs are independently resolved to cluster IDs. Opinion edges resolving
 to one case pair collapse into a `CitationEdge`, while supporting opinion pairs,
 citation depths, and payload-derived provenance hashes remain attached. Self

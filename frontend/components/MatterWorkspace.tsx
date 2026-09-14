@@ -7,10 +7,12 @@ import { Claim, Document, DocumentDetail, Evidence, Finding, Issue, Matter, uplo
 import { PrecedentPanel } from "@/components/PrecedentPanel";
 import { DeepResearchPanel } from "@/components/DeepResearchPanel";
 import { EvidenceMatrixPanel } from "@/components/EvidenceMatrixPanel";
+import { MonitoringPanel } from "@/components/MonitoringPanel";
 import { MatrixRow } from "@/lib/deepResearch";
+import { MatterAlert, MonitoringOverview } from "@/lib/monitoring";
 
 type Job = { job_id: string; status: string; error_code: string | null };
-type Tab = "documents" | "issues" | "xray" | "matrix" | "authorities";
+type Tab = "documents" | "issues" | "xray" | "matrix" | "authorities" | "alerts";
 
 export function MatterWorkspace({ matterId }: { matterId: string }) {
   const [matter, setMatter] = useState<Matter | null>(null);
@@ -29,6 +31,8 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
   const [error, setError] = useState("");
   const [proposition, setProposition] = useState("");
   const [matrix, setMatrix] = useState<MatrixRow[]>([]);
+  const [monitoring, setMonitoring] = useState<MonitoringOverview | null>(null);
+  const [alerts, setAlerts] = useState<MatterAlert[]>([]);
 
   const refresh = useCallback(async () => {
     const [nextMatter, nextDocs, nextClaims, nextFindings, nextIssues] = await Promise.all([
@@ -43,6 +47,13 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
       const rows = await api<MatrixRow[]>(`/matters/${matterId}/evidence-matrix`);
       if (Array.isArray(rows)) setMatrix(rows);
     } catch { setMatrix([]); }
+    try {
+      const [nextMonitoring, nextAlerts] = await Promise.all([
+        api<MonitoringOverview>(`/matters/${matterId}/monitoring`),
+        api<MatterAlert[]>(`/matters/${matterId}/alerts`),
+      ]);
+      setMonitoring(nextMonitoring); setAlerts(nextAlerts);
+    } catch { setMonitoring(null); setAlerts([]); }
   }, [matterId]);
 
   useEffect(() => {
@@ -154,14 +165,37 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
     } catch { setError("Authority review could not be saved."); }
   }
 
+  async function watch(targetType: "CLAIM" | "AUTHORITY" | "MATTER", referenceId: string) {
+    try {
+      const existing = monitoring?.targets?.find((target) => target.target_type === targetType && target.target_reference_id === referenceId);
+      if (existing) {
+        await api(`/matters/${matterId}/monitoring/targets/${existing.target_id}`, {
+          method: "PATCH", body: JSON.stringify({ enabled: !existing.enabled }),
+        });
+      } else {
+        await api(`/matters/${matterId}/monitoring/targets`, {
+          method: "POST", body: JSON.stringify({ target_type: targetType, target_reference_id: referenceId }),
+        });
+      }
+      await refresh();
+    } catch { setError("Watch preference could not be saved."); }
+  }
+
+  function watching(targetType: "CLAIM" | "AUTHORITY" | "MATTER", referenceId: string) {
+    return monitoring?.targets?.some((target) => target.target_type === targetType && target.target_reference_id === referenceId && target.enabled) ?? false;
+  }
+
   return <>
-    <div className="matter-heading"><div><p className="eyebrow">Matter workspace</p><h1>{matter?.name ?? "Loading matter…"}</h1><p>{matter?.court || matter?.jurisdiction || "Forum unspecified"}</p></div><Link href="/matters">All matters →</Link></div>
-    <div className="matter-tabs" role="tablist">{(["matrix", "documents", "issues", "xray", "authorities"] as Tab[]).map((name) =>
+    <div className="matter-heading"><div><p className="eyebrow">Matter workspace</p><h1>{matter?.name ?? "Loading matter…"}</h1><p>{matter?.court || matter?.jurisdiction || "Forum unspecified"}</p><button onClick={() => void watch("MATTER", matterId)}>{watching("MATTER", matterId) ? "Watching Matter · pause" : "Watch Matter"}</button></div><Link href="/matters">All matters →</Link></div>
+    <div className="matter-cards" aria-label="Matter overview"><article><strong>{claims.length}</strong><p>Claims</p></article><article><strong>{findings.filter((finding) => finding.vulnerability === "VULNERABLE" || finding.vulnerability === "UNSUPPORTED").length}</strong><p>Vulnerable</p></article><article><strong>{matrix.reduce((count, row) => count + row.gaps.length, 0)}</strong><p>Open research gaps</p></article><article><strong>{monitoring?.targets?.filter((target) => target.enabled && target.target_type === "CLAIM").length ?? 0}</strong><p>Monitored claims</p></article><article><strong>{monitoring?.unread_alert_count ?? 0}</strong><p>New alerts</p></article></div>
+    <div className="matter-tabs" role="tablist">{(["matrix", "alerts", "documents", "issues", "xray", "authorities"] as Tab[]).map((name) =>
       <button key={name} type="button" role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name === "xray" ? "Argument X-Ray" : name}</button>)}</div>
     {error && <p role="alert" className="notice">{error}</p>}
     {job && <p role="status" className="notice">Analysis: {job.status}{job.error_code ? ` (${job.error_code})` : ""}</p>}
 
-    {tab === "matrix" && <EvidenceMatrixPanel matterId={matterId} rows={matrix} openClaim={openClaim} />}
+    {tab === "matrix" && <EvidenceMatrixPanel matterId={matterId} rows={matrix} openClaim={openClaim} alerts={alerts} targets={monitoring?.targets ?? []} />}
+
+    {tab === "alerts" && <MonitoringPanel matterId={matterId} openClaim={openClaim} onUpdate={() => { void refresh(); }} />}
 
     {tab === "documents" && <section className="workspace"><h2>Documents</h2><p>Uploaded files stay in private local runtime storage. Scanned PDFs require OCR and are not analyzed.</p>
       <label className="upload-control">Upload PDF, DOCX, TXT, or Markdown<input type="file" accept=".pdf,.docx,.txt,.md" disabled={busy} onChange={upload} /></label>
@@ -176,12 +210,12 @@ export function MatterWorkspace({ matterId }: { matterId: string }) {
       {visible.length === 0 && <p>No findings match these filters. Analyze a document to populate the X-Ray.</p>}
     </section>}
 
-    {tab === "authorities" && <section className="workspace"><h2>Authorities</h2><p>These cases are drawn from the local LexTrace corpus. Cited, independently found, and counter-authority roles stay separate.</p><div className="authorities-list">{findings.flatMap((finding) => finding.evidence.map((evidence) => <EvidenceCard key={`${finding.claim_id}-${evidence.evidence_id}`} evidence={evidence} />))}</div></section>}
+    {tab === "authorities" && <section className="workspace"><h2>Authorities</h2><p>These cases are drawn from the local LexTrace corpus. Cited, independently found, and counter-authority roles stay separate.</p><div className="authorities-list">{findings.flatMap((finding) => finding.evidence.map((evidence) => <div key={`${finding.claim_id}-${evidence.evidence_id}`}><EvidenceCard evidence={evidence} /><button onClick={() => void watch("AUTHORITY", evidence.result.case_id)}>{watching("AUTHORITY", evidence.result.case_id) ? "Watching authority · pause" : "Watch this authority"}</button></div>))}</div></section>}
 
     {selectedClaim && <section className="claim-detail" aria-label="Claim detail"><div className="claim-detail-head"><div><p className="eyebrow">Claim detail · provenance</p><h2>{selectedClaim.normalized_proposition}</h2></div><button className="close-button" onClick={() => setSelectedId(null)}>Close</button></div>
       <h3>Exact document source</h3><p>{documents.find((doc) => doc.document_id === selectedClaim.document_id)?.filename} {selectedClaim.span.page ? `· page ${selectedClaim.span.page}` : ""} · characters {selectedClaim.span.start}–{selectedClaim.span.end}</p>
       {detail?.document.document_id === selectedClaim.document_id && <div className="source-viewer">{detail.text.slice(0, selectedClaim.span.start)}<mark>{detail.text.slice(selectedClaim.span.start, selectedClaim.span.end)}</mark>{detail.text.slice(selectedClaim.span.end)}</div>}
-      <h3>Normalized proposition</h3><textarea value={proposition} disabled={!!selectedClaim.wording_locked} onChange={(event) => setProposition(event.target.value)} /><div className="review-actions"><button disabled={!!selectedClaim.wording_locked} onClick={() => void saveClaim()}>Save edit</button><button onClick={() => void toggleLock()}>{selectedClaim.wording_locked ? "Unlock wording" : "Lock wording"}</button><button onClick={() => void markIrrelevant()}>{selectedClaim.irrelevant ? "Restore claim" : "Mark irrelevant"}</button><button onClick={() => void reanalyze()}>Re-analyze this claim</button></div>
+      <h3>Normalized proposition</h3><textarea value={proposition} disabled={!!selectedClaim.wording_locked} onChange={(event) => setProposition(event.target.value)} /><div className="review-actions"><button disabled={!!selectedClaim.wording_locked} onClick={() => void saveClaim()}>Save edit</button><button onClick={() => void toggleLock()}>{selectedClaim.wording_locked ? "Unlock wording" : "Lock wording"}</button><button onClick={() => void markIrrelevant()}>{selectedClaim.irrelevant ? "Restore claim" : "Mark irrelevant"}</button><button onClick={() => void reanalyze()}>Re-analyze this claim</button><button onClick={() => void watch("CLAIM", selectedClaim.claim_id)}>{watching("CLAIM", selectedClaim.claim_id) ? "Watching claim · pause" : "Watch this claim"}</button></div>
       {selectedFinding ? <><h3>Why this finding?</h3><p><span className={`finding-status ${selectedFinding.vulnerability.toLowerCase()}`}>{selectedFinding.vulnerability}</span> {selectedFinding.explanation}</p><p>Verification: {selectedFinding.verification_status} · Research: {selectedFinding.research_coverage}</p>{selectedFinding.unresolved_citation_ids.length > 0 && <p className="notice">{selectedFinding.unresolved_citation_ids.length} unresolved citation reference(s). Additional research is needed.</p>}
         <h3>Exact case-law passages</h3>{selectedFinding.evidence.map((evidence) => <div key={evidence.evidence_id}>{!selectedFinding.cited_authorities.some((link) => link.evidence_id === evidence.evidence_id && link.removed) && <EvidenceCard evidence={evidence} />}{selectedFinding.cited_authorities.filter((link) => link.evidence_id === evidence.evidence_id).map((link) => <div key={`${link.case_id}-${link.relation}-${link.evidence_id}`} className="review-actions"><span>{link.removed ? "Removed by reviewer" : link.relation}</span><button onClick={() => void editAuthority(link.case_id, link.evidence_id, { pinned: !link.pinned })}>{link.pinned ? "Unpin" : "Pin"}</button><button onClick={() => void editAuthority(link.case_id, link.evidence_id, { removed: !link.removed })}>{link.removed ? "Restore" : "Remove suggestion"}</button></div>)}</div>)}<DeepResearchPanel matterId={matterId} claimId={selectedClaim.claim_id} onUpdate={refresh} /><PrecedentPanel matterId={matterId} claimId={selectedClaim.claim_id} /></> : <p>This claim needs re-analysis after the latest edit.</p>}
     </section>}

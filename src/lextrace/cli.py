@@ -23,6 +23,12 @@ from lextrace.ingestion.benchmark_job import acquire_benchmark
 from lextrace.ingestion.corpus import ingest_corpus
 from lextrace.ingestion.courtlistener import IngestionError, fetch_case
 from lextrace.ingestion.normalize import normalize_case
+from lextrace.matter.monitoring_commands import (
+    add_command as add_monitoring_command,
+)
+from lextrace.matter.monitoring_commands import (
+    run_command as run_monitoring_command,
+)
 from lextrace.research.commands import add_command as add_research_command
 from lextrace.research.commands import run_command as run_research_command
 from lextrace.research.contracts import ResearchError
@@ -103,6 +109,7 @@ def main(
     add_commands(commands)
     add_graph_commands(commands)
     add_research_command(commands)
+    add_monitoring_command(commands)
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
@@ -112,6 +119,7 @@ def main(
             run_command(args, parser)
             or run_graph_command(args, parser)
             or run_research_command(args, parser)
+            or run_monitoring_command(args, parser)
         ):
             return
         if args.command == "acquire-benchmark":
