@@ -5,6 +5,8 @@ WORKDIR /app
 RUN useradd --create-home --uid 10001 lextrace
 COPY pyproject.toml README.md ./
 COPY src ./src
+RUN python -m pip install 'torch==2.10.0+cpu' \
+    --index-url https://download.pytorch.org/whl/cpu
 RUN python -m pip install '.[retrieval,research]'
 RUN mkdir -p /app/runtime && chown lextrace:lextrace /app/runtime
 USER lextrace

@@ -257,10 +257,13 @@ local-corpus gaps instead of inferring treatment from bare citations. See
 
 ## Living Matters monitoring v1
 
-Private Matter claims and authorities become bounded monitoring targets. An old
-and new normalized Case snapshot produce a deterministic corpus delta; locally
-available graph edges and BM25 propose candidates, exact passages ground change
-events, and verified impacts create deduplicated alerts. Lawyer review controls
-whether an assessed change is applied to one claim. The local API runs checks in
-the background; no-change is a valid outcome. See [monitoring documentation](v2-living-matters.md)
-for versioning, rebuild behavior, evidence requirements, and current limits.
+Private Matter claims and authorities become bounded monitoring targets. Manual
+`refresh-monitoring` reuses CourtListener ingestion, publishes an immutable
+Case snapshot, and explicitly rebuilds local index/graph views. Deterministic
+corpus and watched-authority graph deltas feed bounded BM25/citation screening.
+Exact passages and prior Matter state reach an optional structured impact judge;
+case, passage, treatment, and run provenance are then checked before events
+become alerts. Lawyer review controls application to one claim and targeted
+derived-cache invalidation. No-change is a valid result. See
+[monitoring documentation](v2-living-matters.md) for versioning, review rules,
+CPU Docker configuration, and limits.

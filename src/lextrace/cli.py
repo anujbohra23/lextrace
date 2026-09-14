@@ -119,7 +119,7 @@ def main(
             run_command(args, parser)
             or run_graph_command(args, parser)
             or run_research_command(args, parser)
-            or run_monitoring_command(args, parser)
+            or run_monitoring_command(args, parser, transport=transport)
         ):
             return
         if args.command == "acquire-benchmark":

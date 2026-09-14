@@ -104,6 +104,21 @@ def graph_edge_keys(graph: CitationGraph | None, case_ids: Iterable[str]) -> set
     }
 
 
+def graph_incoming_edge_keys(
+    graph: CitationGraph | None, watched_case_ids: Iterable[str]
+) -> set[str]:
+    """Capture citation evidence entering watched authorities with source hashes."""
+    if graph is None:
+        return set()
+    return {
+        f"{neighbor.edge.citing_case_id}:{neighbor.edge.cited_case_id}:"
+        f"{support.provenance_id}"
+        for case_id in watched_case_ids
+        for neighbor in graph.get_incoming(case_id, limit=100)
+        for support in neighbor.edge.supports
+    }
+
+
 def publish_corpus(corpus: Corpus, output: Path) -> None:
     """Write a new immutable snapshot under ignored data/; index rebuild is separate."""
     if output.suffix != ".jsonl" or not output.resolve().is_relative_to(

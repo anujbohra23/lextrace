@@ -68,6 +68,7 @@ from lextrace.matter.monitoring_contracts import (
     TargetType,
 )
 from lextrace.matter.monitoring_corpus import corpus_version
+from lextrace.matter.monitoring_judge import StructuredImpactJudge
 from lextrace.matter.red_team import (
     attack_surface,
 )
@@ -1413,6 +1414,10 @@ def create_app(
 
     @application.post("/monitoring/run", response_model=RunAccepted, status_code=202)
     def start_monitoring(request: MonitoringRunRequest) -> RunAccepted:
+        if request.limits.max_llm_calls > 0 and not configured.llm_model:
+            raise MatterError("Monitoring impact model is not configured.")
+        if request.limits.max_llm_calls > 0 and request.limits.max_tokens < 2500:
+            raise MatterError("Monitoring LLM token budget must be at least 2500.")
         corpus_path = Path(request.new_corpus_path).resolve()
         if (
             not corpus_path.is_relative_to(Path("data").resolve())
@@ -1448,12 +1453,26 @@ def create_app(
             try:
                 if graph_source is not None:
                     new_graph = CitationGraph(graph_source)
+                judge = None
+                if configured.llm_model and request.limits.max_llm_calls > 0:
+                    judge = StructuredImpactJudge(
+                        OpenAICompatibleLLM(
+                            configured.llm_model,
+                            api_key=openai_api_key(),
+                            base_url=configured.llm_base_url,
+                            max_retries=0,
+                            max_completion_tokens=min(
+                                400, request.limits.max_tokens // 4
+                            ),
+                        )
+                    )
                 MonitorService(
                     store,
                     old_engine.corpus,
                     new_corpus,
                     old_graph=old_engine.graph,
                     new_graph=new_graph,
+                    judge=judge,
                     limits=request.limits,
                 ).run(selected, run_id=run.run_id)
             except Exception:

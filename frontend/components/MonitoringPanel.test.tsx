@@ -27,3 +27,21 @@ it("shows no-change history and inspectable alert evidence with review actions",
   fireEvent.click(screen.getByRole("button", { name: "Mark reviewed" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/alerts/alert"), expect.objectContaining({ method: "PATCH" })));
 });
+
+it("offers bounded structured impact review for a manual run", async () => {
+  const fetchMock = vi.fn(async (url: string) => {
+    if (url.endsWith("/monitoring")) return json({ targets: [], recent_runs: [], alert_count: 0, unread_alert_count: 0 });
+    if (url.endsWith("/alerts")) return json([]);
+    return json({ run_id: "synthetic-run" });
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  render(<MonitoringPanel matterId="matter" onUpdate={() => undefined} openClaim={() => undefined} />);
+  await waitFor(() => expect(screen.getByText(/No monitoring runs yet/)).toBeInTheDocument());
+  fireEvent.change(screen.getByLabelText("New corpus path"), { target: { value: "data/synthetic.jsonl" } });
+  fireEvent.click(screen.getByLabelText(/Use configured impact model/));
+  fireEvent.click(screen.getByRole("button", { name: "Run monitoring" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
+    expect.stringContaining("/monitoring/run"),
+    expect.objectContaining({ method: "POST", body: expect.stringContaining('"max_llm_calls":2') }),
+  ));
+});

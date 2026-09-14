@@ -3,7 +3,7 @@
 import json
 from datetime import date
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 from pydantic import BaseModel, HttpUrl
@@ -24,8 +24,17 @@ from lextrace.matter.contracts import (
     MatterEvidence,
     SourceSpan,
 )
-from lextrace.matter.monitoring import ImpactJudgment, MonitorService, apply_alert
-from lextrace.matter.monitoring_contracts import MonitoringLimits, MonitoringRun
+from lextrace.matter.monitoring import (
+    ImpactJudgment,
+    MonitoringEvidence,
+    MonitorService,
+    apply_alert,
+)
+from lextrace.matter.monitoring_contracts import (
+    ImpactCategory,
+    MonitoringLimits,
+    MonitoringRun,
+)
 from lextrace.matter.monitoring_corpus import (
     corpus_delta,
     corpus_version,
@@ -33,7 +42,6 @@ from lextrace.matter.monitoring_corpus import (
 )
 from lextrace.matter.research_contracts import ResearchCoverage, ResearchGap
 from lextrace.matter.store import MatterStore
-from lextrace.retrieval.contracts import RetrievalResult
 from lextrace.retrieval.documents import Corpus
 from lextrace.retrieval.engine import LexTraceRetriever
 from tests.unit.test_deep_research import result
@@ -180,13 +188,15 @@ MONITORING_GOLDEN = {
 
 
 class FakeJudge:
-    def judge(self, claim: LegalClaim, result: RetrievalResult) -> ImpactJudgment:
+    def judge(self, evidence: MonitoringEvidence) -> ImpactJudgment:
+        result = evidence.result
         return ImpactJudgment(
             case_id=result.case_id,
             passage_id=result.relevant_passage.passage_id,
-            category="COUNTERS",
+            category="WEAKENS",
             exact_quote="employee received notice",
             explanation="The synthetic passage disputes the claimed timing.",
+            evidence_ids=[result.relevant_passage.passage_id],
         )
 
 
@@ -197,13 +207,24 @@ class ScenarioJudge:
     ) -> None:
         self.category = category
 
-    def judge(self, claim: LegalClaim, result: RetrievalResult) -> ImpactJudgment:
+    def judge(self, evidence: MonitoringEvidence) -> ImpactJudgment:
+        result = evidence.result
+        category = cast(
+            ImpactCategory,
+            {
+                "SUPPORTS": "STRENGTHENS",
+                "COUNTERS": "WEAKENS",
+                "CONFLICTS": "CREATES_CONFLICT",
+                "NO_MATERIAL_EFFECT": "NO_MATERIAL_EFFECT",
+            }[self.category],
+        )
         return ImpactJudgment(
             case_id=result.case_id,
             passage_id=result.relevant_passage.passage_id,
-            category=self.category,
+            category=category,
             exact_quote="employee received notice",
             explanation="Synthetic passage judgment; lawyer review is required.",
+            evidence_ids=[result.relevant_passage.passage_id],
         )
 
 

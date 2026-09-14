@@ -3,6 +3,7 @@
 import hashlib
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
@@ -11,9 +12,10 @@ from pydantic import Field
 from lextrace.domain.case import Case
 from lextrace.graph.courts import classify_authority
 from lextrace.graph.intelligence import PrecedentIntelligence
-from lextrace.graph.intelligence_contracts import TreatmentAnnotation
+from lextrace.graph.intelligence_contracts import DoctrineAnalysis, TreatmentAnnotation
 from lextrace.graph.store import CitationGraph
 from lextrace.matter.contracts import (
+    ArgumentFinding,
     ClaimAuthorityLink,
     CounterAuthority,
     LegalClaim,
@@ -36,7 +38,9 @@ from lextrace.matter.monitoring_corpus import (
     corpus_delta,
     corpus_version,
     graph_edge_keys,
+    graph_incoming_edge_keys,
 )
+from lextrace.matter.research_contracts import ResearchCoverage
 from lextrace.matter.store import MatterStore
 from lextrace.retrieval.bm25 import BM25
 from lextrace.retrieval.contracts import Diagnostics, Record, RetrievalResult
@@ -51,13 +55,46 @@ class ImpactJudgment(Record):
 
     case_id: str
     passage_id: str
-    category: Literal["SUPPORTS", "COUNTERS", "CONFLICTS", "NO_MATERIAL_EFFECT"]
+    category: ImpactCategory
     exact_quote: str = Field(min_length=3, max_length=600)
     explanation: str = Field(min_length=3, max_length=1000)
+    evidence_ids: list[str] = Field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class MonitoringEvidence:
+    run_id: str
+    claim: LegalClaim
+    finding: ArgumentFinding | None
+    result: RetrievalResult
+    authority_relationship: str
+    treatment: TreatmentAnnotation | None
+    doctrine: DoctrineAnalysis | None
+    coverage: ResearchCoverage | None
+    citation_provenance_ids: list[str]
+
+    def valid_ids(self) -> set[str]:
+        identifiers = {self.claim.claim_id, self.result.relevant_passage.passage_id}
+        identifiers.update(self.citation_provenance_ids)
+        if self.finding is not None:
+            identifiers.update(item.evidence_id for item in self.finding.evidence)
+            identifiers.update(
+                item.result.relevant_passage.passage_id
+                for item in self.finding.evidence
+            )
+        if self.treatment is not None:
+            identifiers.add(self.treatment.annotation_id)
+        if self.coverage is not None:
+            identifiers.update(gap.gap_id for gap in self.coverage.gaps)
+        if self.doctrine is not None:
+            identifiers.update(event.event_id for event in self.doctrine.events)
+            identifiers.update(self.doctrine.state.supporting_annotation_ids)
+            identifiers.update(self.doctrine.state.limiting_annotation_ids)
+        return identifiers
 
 
 class ImpactJudge(Protocol):
-    def judge(self, claim: LegalClaim, result: RetrievalResult) -> ImpactJudgment: ...
+    def judge(self, evidence: MonitoringEvidence) -> ImpactJudgment: ...
 
 
 def _stable(*parts: str) -> str:
@@ -164,7 +201,15 @@ def verify_change(
         and event.monitoring_run_id == run.run_id
         and event.new_case_id == case.source_id == impact.new_case_id
         and case.source_id in run.new_corpus.case_ids
-        and run.old_corpus.version != run.new_corpus.version
+        and (
+            run.old_corpus.version != run.new_corpus.version
+            or run.old_graph_version != run.new_graph_version
+            or treatment is not None
+            and treatment.review_state == "CONFIRMED"
+            and treatment.reviewed_at is not None
+            and target.last_checked_at is not None
+            and treatment.reviewed_at > target.last_checked_at
+        )
         and passage is not None
         and event.result is not None
         and event.result.case_id == case.source_id
@@ -175,6 +220,24 @@ def verify_change(
             for opinion in case.opinions
         )
         and impact.passage == passage
+        and (
+            impact.confidence != "MEDIUM"
+            or (
+                passage.passage_id in event.judgment_evidence_ids
+                and set(event.judgment_evidence_ids)
+                <= MonitoringEvidence(
+                    run_id=run.run_id,
+                    claim=claim,
+                    finding=store.finding(event.matter_id, claim.claim_id),
+                    result=event.result,
+                    authority_relationship=impact.authority_relationship,
+                    treatment=treatment,
+                    doctrine=store.latest_doctrine(event.matter_id, claim.claim_id),
+                    coverage=store.research_coverage(claim.claim_id),
+                    citation_provenance_ids=event.citation_provenance_ids,
+                ).valid_ids()
+            )
+        )
         and impact.authority_relationship
         == classify_authority(
             case.source_id,
@@ -207,6 +270,8 @@ class MonitorService:
         new_graph: CitationGraph | None = None,
         judge: ImpactJudge | None = None,
         limits: MonitoringLimits | None = None,
+        old_index_identity: str | None = None,
+        new_index_identity: str | None = None,
     ) -> None:
         self.store = store
         self.old = old
@@ -215,6 +280,8 @@ class MonitorService:
         self.new_graph = new_graph
         self.judge = judge
         self.limits = limits or MonitoringLimits()
+        self.old_index_identity = old_index_identity
+        self.new_index_identity = new_index_identity
         self._intelligence = (
             PrecedentIntelligence(LexTraceRetriever(new, graph=new_graph))
             if new_graph is not None
@@ -227,10 +294,12 @@ class MonitorService:
         started = time.monotonic()
         old_version = corpus_version(
             self.old,
+            index_identity=self.old_index_identity,
             graph_identity=self.old_graph.metadata.graph_id if self.old_graph else None,
         )
         new_version = corpus_version(
             self.new,
+            index_identity=self.new_index_identity,
             graph_identity=self.new_graph.metadata.graph_id if self.new_graph else None,
         )
         selected = sorted(
@@ -248,23 +317,77 @@ class MonitorService:
         )
         self.store.save_monitoring_run(run)
         case_delta = corpus_delta(old_version, new_version)
+        watched: set[str] = set()
+        reviewed_case_ids: set[str] = set()
+        for matter_id in run.matter_ids:
+            if self.store.get_matter(matter_id) is None:
+                continue
+            self.store.ensure_automatic_monitoring_targets(matter_id)
+            for target in self.store.monitoring_targets(matter_id):
+                if not target.enabled:
+                    continue
+                if target.target_type == "AUTHORITY":
+                    watched.add(target.target_reference_id)
+                for claim in _candidate_claims(self.store, target):
+                    finding = self.store.finding(matter_id, claim.claim_id)
+                    if finding is not None:
+                        watched.update(
+                            link.case_id
+                            for link in finding.cited_authorities
+                            if not link.removed
+                        )
+                for alert in self.store.matter_alerts(matter_id):
+                    event = self.store.change_event(matter_id, alert.event_id)
+                    if event is None or event.treatment is None:
+                        continue
+                    reviewed = self.store.treatment_review(
+                        matter_id, alert.claim_id, event.treatment.annotation_id
+                    )
+                    if (
+                        reviewed is not None
+                        and reviewed.review_state == "CONFIRMED"
+                        and reviewed.reviewed_at is not None
+                        and (
+                            target.last_checked_at is None
+                            or reviewed.reviewed_at > target.last_checked_at
+                        )
+                    ):
+                        reviewed_case_ids.add(alert.new_case_id)
+        graph_watch_ids = sorted(watched, key=int)[: self.limits.max_new_cases]
         graph_case_ids = (
             case_delta.added_case_ids
             + case_delta.metadata_changed_case_ids
             + case_delta.text_changed_case_ids
         )[: self.limits.max_new_cases]
+        old_edges = graph_edge_keys(self.old_graph, graph_case_ids)
+        old_edges |= graph_incoming_edge_keys(self.old_graph, graph_watch_ids)
+        new_edges = graph_edge_keys(self.new_graph, graph_case_ids)
+        new_edges |= graph_incoming_edge_keys(self.new_graph, graph_watch_ids)
         delta = corpus_delta(
             old_version,
             new_version,
-            old_edges=graph_edge_keys(self.old_graph, graph_case_ids),
-            new_edges=graph_edge_keys(self.new_graph, graph_case_ids),
+            old_edges=old_edges,
+            new_edges=new_edges,
         )
         run.delta = delta
+        graph_ids = sorted(
+            {
+                edge.split(":", 1)[0]
+                for edge in delta.citation_edges_added
+                if edge.split(":", 1)[0] in self.new.by_id
+            }
+            | reviewed_case_ids,
+            key=int,
+        )
         limit_reached = (
             len(selected) > self.limits.max_matters
             or len(delta.added_case_ids) > self.limits.max_new_cases
+            or len(watched) > self.limits.max_new_cases
         )
-        new_ids = delta.added_case_ids[: self.limits.max_new_cases]
+        new_ids = sorted(set(delta.added_case_ids) | set(graph_ids), key=int)[
+            : self.limits.max_new_cases
+        ]
+        run.graph_cases_examined = len(set(graph_ids) - set(delta.added_case_ids))
         if not new_ids:
             if delta.metadata_changed_case_ids or delta.text_changed_case_ids:
                 run.errors.append(
@@ -322,6 +445,12 @@ class MonitorService:
                     )
                     considered = 0
                     for ranked, citation_ids in candidates:
+                        if (
+                            time.monotonic() - started
+                            >= self.limits.max_runtime_seconds
+                        ):
+                            limit_reached = True
+                            break
                         if considered >= min(
                             policy.max_candidates_per_target,
                             self.limits.max_candidates_per_target,
@@ -354,6 +483,13 @@ class MonitorService:
                             ranked.score,
                             citation_ids,
                         )
+                        if (
+                            self.limits.max_tokens > 0
+                            and run.input_tokens + run.output_tokens
+                            >= self.limits.max_tokens
+                        ):
+                            limit_reached = True
+                            break
                     if limit_reached:
                         break
                 target.last_checked_at = _now()
@@ -365,7 +501,7 @@ class MonitorService:
                     break
             if limit_reached:
                 break
-        run.new_cases_examined = len(new_ids)
+        run.new_cases_examined = len(delta.added_case_ids[: self.limits.max_new_cases])
         if limit_reached:
             run.outcome = "LIMIT_REACHED"
             run.errors.append(
@@ -494,35 +630,82 @@ class MonitorService:
             result = result.model_copy(
                 update={"relevant_passage": treatment.passage.passage}
             )
+        finding = self.store.finding(matter_id, claim.claim_id)
+        coverage = self.store.research_coverage(claim.claim_id)
+        doctrine = self.store.latest_doctrine(matter_id, claim.claim_id)
+        evidence = MonitoringEvidence(
+            run_id=run.run_id,
+            claim=claim,
+            finding=finding,
+            result=result,
+            authority_relationship=relationship.category,
+            treatment=treatment,
+            doctrine=doctrine,
+            coverage=coverage,
+            citation_provenance_ids=citations,
+        )
         category: ImpactCategory = "NEW_RELEVANT_AUTHORITY"
         explanation = (
             "A new case contains a matching passage; legal effect needs review."
         )
         confidence: Literal["HIGH", "MEDIUM", "LOW"] = "LOW"
         judgment: ImpactJudgment | None = None
-        if self.judge is not None and run.llm_calls < self.limits.max_llm_calls:
+        usage = getattr(self.judge, "usage", None)
+        if (
+            self.judge is not None
+            and run.llm_calls < self.limits.max_llm_calls
+            and (
+                usage is None
+                or self.limits.max_tokens > run.input_tokens + run.output_tokens
+            )
+        ):
             run.llm_calls += 1
             try:
-                candidate = self.judge.judge(claim, result)
+                prior_input = usage.input_tokens if usage is not None else 0
+                prior_output = usage.output_tokens if usage is not None else 0
+                candidate = self.judge.judge(evidence)
+                if usage is not None:
+                    run.input_tokens += usage.input_tokens - prior_input
+                    run.output_tokens += usage.output_tokens - prior_output
                 if (
                     candidate.case_id == case.source_id
                     and candidate.passage_id == result.relevant_passage.passage_id
                     and candidate.exact_quote in result.relevant_passage.text
+                    and candidate.evidence_ids
+                    and result.relevant_passage.passage_id in candidate.evidence_ids
+                    and set(candidate.evidence_ids) <= evidence.valid_ids()
+                    and not (
+                        treatment is not None
+                        and treatment.review_state != "CONFIRMED"
+                        and treatment.annotation_id in candidate.evidence_ids
+                        and candidate.category
+                        in {
+                            "STRENGTHENS",
+                            "WEAKENS",
+                            "CREATES_CONFLICT",
+                            "RESOLVES_GAP",
+                        }
+                    )
+                    and (
+                        candidate.category != "RESOLVES_GAP"
+                        or coverage is not None
+                        and any(
+                            gap.gap_id in candidate.evidence_ids and not gap.resolved
+                            for gap in coverage.gaps
+                        )
+                    )
                 ):
                     judgment = candidate
+                else:
+                    run.rejected_impacts += 1
             except Exception:
                 run.errors.append("Structured impact judgment failed safely.")
         if judgment is not None:
-            if judgment.category == "NO_MATERIAL_EFFECT":
+            if judgment.category in {"NO_MATERIAL_EFFECT", "INSUFFICIENT_EVIDENCE"}:
                 return
-            if judgment.category == "SUPPORTS":
-                category = "STRENGTHENS"
-            elif judgment.category == "COUNTERS":
-                category = "WEAKENS"
-            else:
-                category = "CREATES_CONFLICT"
+            category = judgment.category
             explanation = judgment.explanation
-            confidence = "MEDIUM"
+            confidence = "MEDIUM" if category != "NEW_RELEVANT_AUTHORITY" else "LOW"
         elif citations and score <= 0:
             return
         if treatment is not None and treatment.review_state == "CONFIRMED":
@@ -539,7 +722,6 @@ class MonitorService:
                     "Human-confirmed citation context follows a linked authority."
                 )
                 confidence = "HIGH"
-        coverage = self.store.research_coverage(claim.claim_id)
         controlling = relationship.category in {"CONTROLLING", "SAME_COURT"}
         if (
             category == "STRENGTHENS"
@@ -575,7 +757,6 @@ class MonitorService:
             or event_type not in target.monitoring_scope.enabled_event_types
         ):
             return
-        finding = self.store.finding(matter_id, claim.claim_id)
         event = ChangeEvent(
             event_id=_stable(matter_id, claim.claim_id, case.source_id, event_type),
             monitoring_run_id=run.run_id,
@@ -592,11 +773,11 @@ class MonitorService:
             passage=result.relevant_passage,
             result=result,
             citation_provenance_ids=citations,
+            judgment_evidence_ids=judgment.evidence_ids if judgment else [],
             treatment=treatment,
             discovered_at=_now(),
             verification_state="VERIFIED",
         )
-        doctrine = self.store.latest_doctrine(matter_id, claim.claim_id)
         impact = ChangeImpact(
             impact_id=_stable(
                 event.event_id, category, result.relevant_passage.passage_id

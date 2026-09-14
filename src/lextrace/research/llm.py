@@ -37,6 +37,7 @@ class OpenAICompatibleLLM:
         base_url: str | None = None,
         timeout: float = 60,
         max_retries: int = 2,
+        max_completion_tokens: int | None = None,
     ) -> None:
         if not api_key:
             raise ResearchError("LLM API credential is missing.")
@@ -69,6 +70,7 @@ class OpenAICompatibleLLM:
                 "Could not initialize the configured LLM provider."
             ) from None
         self.max_retries = max_retries
+        self.max_completion_tokens = max_completion_tokens
 
     def generate(
         self,
@@ -89,12 +91,15 @@ class OpenAICompatibleLLM:
         for attempt in range(self.max_retries + 1):
             try:
                 self.usage.calls += 1
-                response = self._client.chat.completions.parse(
-                    model=self.model,
-                    messages=cast(Any, messages),
-                    response_format=schema,
-                    temperature=0,
-                )
+                request: dict[str, Any] = {
+                    "model": self.model,
+                    "messages": cast(Any, messages),
+                    "response_format": schema,
+                    "temperature": 0,
+                }
+                if getattr(self, "max_completion_tokens", None) is not None:
+                    request["max_completion_tokens"] = self.max_completion_tokens
+                response = self._client.chat.completions.parse(**request)
                 parsed = response.choices[0].message.parsed
                 if parsed is None:
                     raise ResearchError("LLM returned no structured output.")

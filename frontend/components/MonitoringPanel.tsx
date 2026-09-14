@@ -17,6 +17,7 @@ export function MonitoringPanel({ matterId, onUpdate, openClaim }: {
   const [claim, setClaim] = useState("ALL");
   const [run, setRun] = useState<MonitoringRun | null>(null);
   const [corpusPath, setCorpusPath] = useState("");
+  const [useImpactModel, setUseImpactModel] = useState(false);
   const [error, setError] = useState("");
 
   async function refresh() {
@@ -63,7 +64,10 @@ export function MonitoringPanel({ matterId, onUpdate, openClaim }: {
   async function startRun() {
     try {
       const accepted = await api<{ run_id: string }>("/monitoring/run", {
-        method: "POST", body: JSON.stringify({ new_corpus_path: corpusPath, matter_ids: [matterId] }),
+        method: "POST", body: JSON.stringify({
+          new_corpus_path: corpusPath, matter_ids: [matterId],
+          limits: useImpactModel ? { max_llm_calls: 2, max_tokens: 5000 } : undefined,
+        }),
       });
       setRun({ run_id: accepted.run_id, status: "queued", outcome: null, completed_at: null,
         new_cases_examined: 0, alerts_created: 0, targets_examined: 0, errors: [] });
@@ -81,6 +85,7 @@ export function MonitoringPanel({ matterId, onUpdate, openClaim }: {
       </article>
       <article><h3>Check a new corpus snapshot</h3><p>Point to a prepared JSONL file under backend data/. Index and graph rebuilds are separate explicit steps.</p>
         <input aria-label="New corpus path" value={corpusPath} placeholder="data/updated_cases.jsonl" onChange={(event) => setCorpusPath(event.target.value)} />
+        <label><input type="checkbox" checked={useImpactModel} onChange={(event) => setUseImpactModel(event.target.checked)} /> Use configured impact model for bounded Stage 2 review</label>
         <button disabled={!corpusPath || run?.status === "running" || run?.status === "queued"} onClick={() => void startRun()}>Run monitoring</button>
         {run && <p role="status">{run.status} · {run.outcome ?? "checking"} · {run.new_cases_examined} new cases · {run.alerts_created} new alerts</p>}
       </article>

@@ -20,6 +20,7 @@ PromptId = Literal[
     "matter-verification",
     "red-team-verification",
     "matter-fact-comparison",
+    "monitoring-impact",
 ]
 
 

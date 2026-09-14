@@ -136,6 +136,7 @@ class MonitoringRun(Record):
     matters_examined: int = 0
     targets_examined: int = 0
     new_cases_examined: int = 0
+    graph_cases_examined: int = 0
     stage_one_candidates: int = 0
     stage_two_analyses: int = 0
     events_created: int = 0
@@ -162,6 +163,7 @@ class ChangeEvent(Record):
     passage: Passage | None = None
     result: RetrievalResult | None = None
     citation_provenance_ids: list[str] = Field(default_factory=list)
+    judgment_evidence_ids: list[str] = Field(default_factory=list)
     treatment: TreatmentAnnotation | None = None
     discovered_at: datetime
     verification_state: Literal["VERIFIED", "UNVERIFIED"] = "UNVERIFIED"

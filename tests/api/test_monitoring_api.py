@@ -53,6 +53,16 @@ def test_monitoring_api_and_background_no_change(
         assert (
             client.post(
                 "/monitoring/run",
+                json={
+                    "new_corpus_path": str(new_path),
+                    "limits": {"max_llm_calls": 1, "max_tokens": 5000},
+                },
+            ).status_code
+            == 400
+        )
+        assert (
+            client.post(
+                "/monitoring/run",
                 json={"new_corpus_path": str(tmp_path / "outside.jsonl")},
             ).status_code
             == 400
