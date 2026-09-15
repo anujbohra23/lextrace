@@ -131,8 +131,9 @@ def _engine(monkeypatch: pytest.MonkeyPatch) -> LexTraceRetriever:
     return engine
 
 
+@pytest.mark.parametrize("duplicate_claims", [False, True])
 def test_analysis_preserves_spans_and_uses_canonical_evidence(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, duplicate_claims: bool
 ) -> None:
     text = (Path(__file__).parents[1] / "fixtures" / "matter_brief.txt").read_text()
     store = MatterStore(tmp_path / "matter.sqlite3", tmp_path / "private")
@@ -140,6 +141,22 @@ def test_analysis_preserves_spans_and_uses_canonical_evidence(
     document = store.add_document(matter.matter_id, "brief.txt", text.encode())
     engine = _engine(monkeypatch)
     llm = FakeMatterLLM()
+    if duplicate_claims:
+        original_generate = llm.generate
+
+        def repeat_claims(
+            prompt: PromptDefinition,
+            schema: type[Output],
+            context: dict[str, object],
+        ) -> Output:
+            output = original_generate(prompt, schema, context)
+            if prompt.prompt_id == "matter-claims":
+                data = output.model_dump()
+                data["claims"] = [data["claims"][0]] * 3
+                return schema.model_validate(data)
+            return output
+
+        monkeypatch.setattr(llm, "generate", repeat_claims)
     result = MatterAnalyzer(engine, llm).analyze(
         matter.matter_id,
         document.document_id,
@@ -147,6 +164,7 @@ def test_analysis_preserves_spans_and_uses_canonical_evidence(
         store.sections(matter.matter_id, document.document_id),
     )
     assert len(result.claims) == 1
+    assert llm.usage.calls == 4
     claim = result.claims[0]
     assert text[claim.span.start : claim.span.end] == claim.exact_source_text
     assert "fabricated" not in claim.normalized_proposition.lower()

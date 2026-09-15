@@ -274,6 +274,7 @@ class MatterAnalyzer:
         citations = extract_citations(matter_id, document_id, text, sections)
         by_section = {s.section_id: s for s in selected}
         claims = []
+        seen_claim_ids: set[str] = set()
         for candidate in claim_output.claims[:MAX_CLAIMS]:
             section = by_section.get(candidate.section_id)
             if section is None or not candidate.exact_quote.strip():
@@ -293,6 +294,9 @@ class MatterAnalyzer:
                 and start <= c.span.start <= min(section.span.end, end + 180)
             ]
             claim_id = _stable(document_id, str(start), candidate.exact_quote)
+            if claim_id in seen_claim_ids:
+                continue
+            seen_claim_ids.add(claim_id)
             claim = LegalClaim(
                 claim_id=claim_id,
                 matter_id=matter_id,
