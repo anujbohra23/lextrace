@@ -140,7 +140,7 @@ def test_background_xray_and_manual_edit(
     import importlib
 
     api_module = importlib.import_module("lextrace.api.app")
-    monkeypatch.setattr(api_module, "OpenAICompatibleLLM", StubLLM)
+    monkeypatch.setattr(api_module, "configured_llm", StubLLM)
     monkeypatch.setenv("OPENAI_API_KEY", "offline-test-key")
     case = Case(
         source_id="1",

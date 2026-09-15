@@ -4,6 +4,9 @@ services:
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
+      LEXTRACE_LLM_PROVIDER: ${LEXTRACE_LLM_PROVIDER:-openai-compatible}
+      OLLAMA_BASE_URL: ${OLLAMA_DOCKER_BASE_URL:-http://host.docker.internal:11434}
+      LEXTRACE_LLM_TIMEOUT: ${LEXTRACE_LLM_TIMEOUT:-180}
       LEXTRACE_LLM_MODEL: ${LEXTRACE_LLM_MODEL:-}
       LEXTRACE_INDEX_PATH: /app/artifacts/indexes/default
       LEXTRACE_GRAPH_PATH: /app/artifacts/graphs/default
@@ -17,6 +20,8 @@ services:
       - ./data:/app/data:ro
       - lextrace-runtime:/app/runtime
       - lextrace-models:/home/lextrace/.cache
+    extra_hosts:
+      - host.docker.internal:host-gateway
     ports: ["8000:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]

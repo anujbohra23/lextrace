@@ -74,6 +74,33 @@ The health API and CLI help require no credentials. Ingestion requires a
 CourtListener API token exported as `COURTLISTENER_API_TOKEN`. See `.env.example`;
 `.env` files are not automatically loaded.
 
+### Local private inference with Ollama
+
+LexTrace can run structured Matter, research, and monitoring judgments through
+an Ollama model on the same host. Install Ollama, run `ollama pull qwen3:8b`,
+start its service, and set:
+
+```sh
+export LEXTRACE_LLM_PROVIDER=ollama
+export LEXTRACE_LLM_MODEL=qwen3:8b
+export OLLAMA_BASE_URL=http://127.0.0.1:11434
+export LEXTRACE_LLM_TIMEOUT=180
+```
+
+With local LexTrace services, local corpus/Matter storage, and host-local
+Ollama, Matter text need not go to a paid remote LLM provider. The
+OpenAI-compatible provider remains available by setting
+`LEXTRACE_LLM_PROVIDER=openai-compatible`, `OPENAI_API_KEY`, and a model ID.
+Ollama calls use schema-constrained JSON, deterministic sampling, an 8,192-token
+context limit, bounded output, and disabled thinking output. Local inference
+still consumes machine memory and compute time.
+
+The Docker backend uses `OLLAMA_DOCKER_BASE_URL`, defaulting to
+`http://host.docker.internal:11434`, independently of the host-process
+`OLLAMA_BASE_URL`. The host daemon must listen on an address reachable from
+Docker. The frontend and backend images do not contain the Ollama model. For a daemon
+bound only to `127.0.0.1`, run the backend directly on the host instead.
+
 ## Run locally
 
 ```sh

@@ -671,8 +671,12 @@ class MonitorService:
                     candidate.case_id == case.source_id
                     and candidate.passage_id == result.relevant_passage.passage_id
                     and candidate.exact_quote in result.relevant_passage.text
-                    and candidate.evidence_ids
-                    and result.relevant_passage.passage_id in candidate.evidence_ids
+                    and (
+                        candidate.category
+                        in {"NO_MATERIAL_EFFECT", "INSUFFICIENT_EVIDENCE"}
+                        or candidate.evidence_ids
+                        and result.relevant_passage.passage_id in candidate.evidence_ids
+                    )
                     and set(candidate.evidence_ids) <= evidence.valid_ids()
                     and not (
                         treatment is not None

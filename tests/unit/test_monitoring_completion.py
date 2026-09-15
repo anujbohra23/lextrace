@@ -105,6 +105,33 @@ def test_invalid_model_evidence_cannot_create_substantive_alert(tmp_path: Path) 
     store.close()
 
 
+@pytest.mark.parametrize("category", ["NO_MATERIAL_EFFECT", "INSUFFICIENT_EVIDENCE"])
+def test_non_substantive_judgment_needs_no_evidence_ids(
+    tmp_path: Path, category: ImpactCategory
+) -> None:
+    class NoEffectJudge(CategoryJudge):
+        def judge(self, evidence: MonitoringEvidence) -> ImpactJudgment:
+            return super().judge(evidence).model_copy(update={"evidence_ids": []})
+
+    store, matter_id, claim_id = matter_store(tmp_path)
+    store.add_monitoring_target(matter_id, "CLAIM", claim_id)
+    old = Corpus([case("1", "Old unrelated source.")])
+    new = Corpus(
+        old.cases + [case("2", "The employee received notice before termination.")]
+    )
+    run = MonitorService(
+        store,
+        old,
+        new,
+        judge=NoEffectJudge(category),
+        limits=MonitoringLimits(max_llm_calls=1),
+    ).run([matter_id])
+    assert run.rejected_impacts == 0
+    assert run.outcome == "NO_MATERIAL_CHANGE"
+    assert store.matter_alerts(matter_id) == []
+    store.close()
+
+
 def test_malformed_judgment_fails_safely(tmp_path: Path) -> None:
     class MalformedJudge:
         def judge(self, evidence: MonitoringEvidence) -> ImpactJudgment:

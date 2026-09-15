@@ -8,11 +8,11 @@ from datetime import date
 from pathlib import Path
 from typing import Protocol
 
-from lextrace.config import AppSettings, ConfigurationError, openai_api_key
+from lextrace.config import AppSettings, ConfigurationError
 from lextrace.graph.contracts import GraphError
 from lextrace.research.contracts import ResearchError, ResearchRequest, ResearchResponse
 from lextrace.research.evaluation import evaluate_runs
-from lextrace.research.llm import OpenAICompatibleLLM
+from lextrace.research.llm import configured_llm
 from lextrace.research.workflow import ResearchWorkflow
 from lextrace.retrieval.contracts import RetrievalError
 from lextrace.retrieval.engine import LexTraceRetriever
@@ -31,7 +31,7 @@ def add_command(commands: argparse._SubParsersAction[argparse.ArgumentParser]) -
     parser.add_argument("--as-of", type=date.fromisoformat)
     parser.add_argument("--max-cases", type=int, default=8, choices=range(1, 21))
     parser.add_argument(
-        "--provider", choices=["openai-compatible"], default="openai-compatible"
+        "--provider", choices=["openai-compatible", "ollama"], default=None
     )
     parser.add_argument("--model", help="Provider model ID; or set LEXTRACE_LLM_MODEL")
     parser.add_argument("--json", action="store_true")
@@ -47,16 +47,19 @@ def build_workflow(
     model_name: str | None,
     *,
     settings: AppSettings | None = None,
+    provider_name: str | None = None,
 ) -> ResearchWorkflow:
     configured = settings or AppSettings.from_environment()
     model = model_name or configured.llm_model
     if not model:
         raise ResearchError("LLM model is not configured.")
     retriever = LexTraceRetriever.from_index(index_path, graph_path=graph_path)
-    llm = OpenAICompatibleLLM(
+    llm = configured_llm(
         model,
-        api_key=openai_api_key(),
-        base_url=configured.llm_base_url,
+        provider=provider_name or configured.llm_provider,
+        openai_base_url=configured.llm_base_url,
+        ollama_base_url=configured.ollama_base_url,
+        timeout=configured.llm_timeout,
     )
     return ResearchWorkflow(retriever, llm)
 
@@ -128,7 +131,9 @@ def run_command(
         return False
     current = workflow
     try:
-        current = current or build_workflow(args.index, args.graph, args.model)
+        current = current or build_workflow(
+            args.index, args.graph, args.model, provider_name=args.provider
+        )
         response = current.run(
             ResearchRequest(
                 question=args.question,

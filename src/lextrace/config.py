@@ -2,6 +2,7 @@
 
 import os
 from pathlib import Path
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,7 +27,10 @@ class AppSettings(BaseModel):
     matter_db: Path = Path("artifacts/runtime/matters.sqlite3")
     private_matter_root: Path = Path("artifacts/runtime/private_matters")
     llm_model: str | None = None
+    llm_provider: Literal["openai-compatible", "ollama"] = "openai-compatible"
     llm_base_url: str | None = None
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    llm_timeout: float = Field(default=180, gt=0, le=600)
     persist_content: bool = True
     max_concurrent_research: int = Field(default=1, ge=1, le=8)
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
@@ -63,7 +67,15 @@ class AppSettings(BaseModel):
                     )
                 ),
                 llm_model=os.environ.get("LEXTRACE_LLM_MODEL"),
+                llm_provider=cast(
+                    Literal["openai-compatible", "ollama"],
+                    os.environ.get("LEXTRACE_LLM_PROVIDER", "openai-compatible"),
+                ),
                 llm_base_url=os.environ.get("OPENAI_BASE_URL"),
+                ollama_base_url=os.environ.get(
+                    "OLLAMA_BASE_URL", "http://127.0.0.1:11434"
+                ),
+                llm_timeout=float(os.environ.get("LEXTRACE_LLM_TIMEOUT", "180")),
                 persist_content=os.environ.get(
                     "LEXTRACE_PERSIST_CONTENT", "true"
                 ).lower()

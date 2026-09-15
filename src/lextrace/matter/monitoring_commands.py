@@ -10,7 +10,7 @@ from pathlib import Path
 import httpx
 from pydantic import ValidationError
 
-from lextrace.config import AppSettings, courtlistener_token, openai_api_key
+from lextrace.config import AppSettings, courtlistener_token
 from lextrace.corpus import CorpusError, CorpusQuery, atomic_write, read_cases
 from lextrace.graph.build import build_graph
 from lextrace.graph.contracts import GraphEvidenceBundle
@@ -25,7 +25,7 @@ from lextrace.matter.monitoring_corpus import (
 )
 from lextrace.matter.monitoring_judge import StructuredImpactJudge
 from lextrace.matter.store import MatterStore
-from lextrace.research.llm import OpenAICompatibleLLM
+from lextrace.research.llm import configured_llm
 from lextrace.retrieval.documents import Corpus
 from lextrace.retrieval.index import IndexMetadata, LocalIndex, build_index
 
@@ -183,10 +183,12 @@ def _refresh(
         raise CorpusError("Monitoring impact model is not configured.")
     judge = (
         StructuredImpactJudge(
-            OpenAICompatibleLLM(
+            configured_llm(
                 settings.llm_model,
-                api_key=openai_api_key(),
-                base_url=settings.llm_base_url,
+                provider=settings.llm_provider,
+                openai_base_url=settings.llm_base_url,
+                ollama_base_url=settings.ollama_base_url,
+                timeout=settings.llm_timeout,
                 max_retries=0,
                 max_completion_tokens=min(400, limits.max_tokens // 4),
             )

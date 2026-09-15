@@ -209,8 +209,7 @@ def test_issue_rerun_is_bounded_to_selected_issue(
                 }
             )
 
-    monkeypatch.setattr("lextrace.api.app.OpenAICompatibleLLM", OfflineLLM)
-    monkeypatch.setattr("lextrace.api.app.openai_api_key", lambda: "offline-test")
+    monkeypatch.setattr("lextrace.api.app.configured_llm", OfflineLLM)
     settings = AppSettings(
         matter_db=tmp_path / "matter.sqlite3",
         private_matter_root=tmp_path / "private",

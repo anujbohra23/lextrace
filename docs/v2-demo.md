@@ -31,5 +31,7 @@ No private brief or provider output is needed to read this story.
 The walkthrough describes the intended inspection path, not a claim that every
 example proposition has a known outcome in the bundled engineering corpus.
 Actual Matter analysis and impact judging require a configured structured-output
-provider and available provider credits. Local retrieval, graph coverage, and
-model judgments are limited; LexTrace does not replace legal review.
+provider. The walkthrough can use host-local Ollama (`qwen3:8b`) without paid
+provider credits; the optional OpenAI-compatible provider requires its own
+credentials and availability. Local retrieval, graph coverage, and model
+judgments are limited; LexTrace does not replace legal review.

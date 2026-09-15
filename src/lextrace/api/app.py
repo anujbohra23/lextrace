@@ -29,7 +29,6 @@ from lextrace.config import (
     APP_TITLE,
     AppSettings,
     ConfigurationError,
-    openai_api_key,
 )
 from lextrace.domain.case import Case
 from lextrace.graph.contracts import CitationNeighbor, GraphError
@@ -89,7 +88,7 @@ from lextrace.matter.workflows import (
     red_team_graph,
 )
 from lextrace.research.contracts import ResearchError, ResearchRequest
-from lextrace.research.llm import OpenAICompatibleLLM
+from lextrace.research.llm import configured_llm
 from lextrace.research.runtime import (
     CachedStructuredLLM,
     ResearchJobs,
@@ -202,10 +201,12 @@ def create_app(
         if not configured.llm_model:
             raise MatterError("LLM model is not configured.")
         try:
-            provider = OpenAICompatibleLLM(
+            provider = configured_llm(
                 configured.llm_model,
-                api_key=openai_api_key(),
-                base_url=configured.llm_base_url,
+                provider=configured.llm_provider,
+                openai_base_url=configured.llm_base_url,
+                ollama_base_url=configured.ollama_base_url,
+                timeout=configured.llm_timeout,
             )
         except (ResearchError, ConfigurationError):
             raise MatterError("Matter analysis provider is not configured.") from None
@@ -330,10 +331,12 @@ def create_app(
                         status_code=503, detail="LLM model is not configured."
                     )
                 try:
-                    provider = OpenAICompatibleLLM(
+                    provider = configured_llm(
                         configured.llm_model,
-                        api_key=openai_api_key(),
-                        base_url=configured.llm_base_url,
+                        provider=configured.llm_provider,
+                        openai_base_url=configured.llm_base_url,
+                        ollama_base_url=configured.ollama_base_url,
+                        timeout=configured.llm_timeout,
                     )
                 except (ResearchError, ConfigurationError) as error:
                     raise HTTPException(status_code=503, detail=str(error)) from None
@@ -1456,10 +1459,12 @@ def create_app(
                 judge = None
                 if configured.llm_model and request.limits.max_llm_calls > 0:
                     judge = StructuredImpactJudge(
-                        OpenAICompatibleLLM(
+                        configured_llm(
                             configured.llm_model,
-                            api_key=openai_api_key(),
-                            base_url=configured.llm_base_url,
+                            provider=configured.llm_provider,
+                            openai_base_url=configured.llm_base_url,
+                            ollama_base_url=configured.ollama_base_url,
+                            timeout=configured.llm_timeout,
                             max_retries=0,
                             max_completion_tokens=min(
                                 400, request.limits.max_tokens // 4

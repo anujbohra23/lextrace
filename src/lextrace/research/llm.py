@@ -126,3 +126,38 @@ class OpenAICompatibleLLM:
                 self.retries += 1
                 time.sleep(min(2**attempt, 2))
         raise ResearchError("Structured LLM generation failed.")
+
+
+def configured_llm(
+    model: str,
+    *,
+    provider: str = "openai-compatible",
+    openai_base_url: str | None = None,
+    ollama_base_url: str = "http://127.0.0.1:11434",
+    timeout: float = 180,
+    max_retries: int = 2,
+    max_completion_tokens: int | None = None,
+) -> StructuredLLM:
+    """Construct one provider at the application configuration boundary."""
+    if provider == "ollama":
+        from lextrace.research.ollama import OllamaLLM
+
+        return OllamaLLM(
+            model,
+            base_url=ollama_base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            max_completion_tokens=max_completion_tokens or 4096,
+        )
+    if provider == "openai-compatible":
+        from lextrace.config import openai_api_key
+
+        return OpenAICompatibleLLM(
+            model,
+            api_key=openai_api_key(),
+            base_url=openai_base_url,
+            timeout=timeout,
+            max_retries=max_retries,
+            max_completion_tokens=max_completion_tokens,
+        )
+    raise ResearchError("LLM provider configuration is invalid.")
