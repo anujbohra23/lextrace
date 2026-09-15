@@ -123,6 +123,7 @@ def test_matter_lifecycle_and_private_upload(tmp_path: Path) -> None:
         root = tmp_path / "private" / matter_id
         for _ in range(100):
             job = client.get(f"/matters/{matter_id}/jobs/{job_id}").json()
+            assert job["job_id"] == job_id
             if job["status"] == "failed":
                 break
             time.sleep(0.01)
@@ -179,6 +180,7 @@ def test_background_xray_and_manual_edit(
         job_id = accepted.json()["job_id"]
         for _ in range(100):
             job = client.get(f"/matters/{matter_id}/jobs/{job_id}").json()
+            assert job["job_id"] == job_id
             if job["status"] in {"completed", "failed"}:
                 break
             time.sleep(0.01)

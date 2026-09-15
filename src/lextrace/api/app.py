@@ -485,7 +485,7 @@ def create_app(
         row = get_matter_store().job(matter_id, job_id)
         if row is None:
             raise MatterError("Analysis job was not found.")
-        return row
+        return {**row, "job_id": row["id"]}
 
     @application.get("/matters/{matter_id}/claims")
     def matter_claims(matter_id: str) -> list[dict[str, object]]:
