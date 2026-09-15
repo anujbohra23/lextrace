@@ -37,6 +37,7 @@ class CategoryJudge:
     def judge(self, evidence: MonitoringEvidence) -> ImpactJudgment:
         passage = evidence.result.relevant_passage
         return ImpactJudgment(
+            claim_id=evidence.claim.claim_id,
             case_id=evidence.result.case_id,
             passage_id=passage.passage_id,
             category=self.category,
@@ -397,6 +398,7 @@ def test_structured_adapter_uses_only_supplied_evidence(tmp_path: Path) -> None:
             assert context["case_id"] == "2"
             assert "private_document" not in context
             return ImpactJudgment(
+                claim_id=str(context["claim_id"]),
                 case_id="2",
                 passage_id=str(context["passage_id"]),
                 category="STRENGTHENS",

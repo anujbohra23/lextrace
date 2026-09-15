@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 
 from lextrace.domain.case import Case
 from lextrace.graph.courts import classify_authority
@@ -50,15 +50,29 @@ from lextrace.retrieval.passages import segment, select
 from lextrace.retrieval.settings import PassageSettings
 
 
-class ImpactJudgment(Record):
-    """Optional structured Stage 2 judgment, checked against exact supplied text."""
+class ImpactDraft(Record):
+    """Untrusted generation draft; never accepted as a verified judgment."""
 
+    claim_id: str = Field(min_length=1)
     case_id: str
     passage_id: str
     category: ImpactCategory
     exact_quote: str = Field(min_length=3, max_length=600)
     explanation: str = Field(min_length=3, max_length=1000)
     evidence_ids: list[str] = Field(default_factory=list)
+
+
+class ImpactJudgment(ImpactDraft):
+    """Evidence-bound Stage 2 judgment, still requiring provenance verification."""
+
+    @model_validator(mode="after")
+    def require_references(self) -> "ImpactJudgment":
+        if self.category not in {"NO_MATERIAL_EFFECT", "INSUFFICIENT_EVIDENCE"}:
+            if not self.passage_id or self.passage_id not in self.evidence_ids:
+                raise ValueError(
+                    "Positive impact requires its passage evidence reference."
+                )
+        return self
 
 
 @dataclass(frozen=True)
@@ -653,22 +667,22 @@ class MonitorService:
         usage = getattr(self.judge, "usage", None)
         if (
             self.judge is not None
-            and run.llm_calls < self.limits.max_llm_calls
+            and run.llm_calls + getattr(self.judge, "max_calls", 1)
+            <= self.limits.max_llm_calls
             and (
                 usage is None
                 or self.limits.max_tokens > run.input_tokens + run.output_tokens
             )
         ):
             run.llm_calls += 1
+            prior_input = usage.input_tokens if usage is not None else 0
+            prior_output = usage.output_tokens if usage is not None else 0
+            prior_calls = usage.calls if usage is not None else 0
             try:
-                prior_input = usage.input_tokens if usage is not None else 0
-                prior_output = usage.output_tokens if usage is not None else 0
                 candidate = self.judge.judge(evidence)
-                if usage is not None:
-                    run.input_tokens += usage.input_tokens - prior_input
-                    run.output_tokens += usage.output_tokens - prior_output
                 if (
-                    candidate.case_id == case.source_id
+                    candidate.claim_id == claim.claim_id
+                    and candidate.case_id == case.source_id
                     and candidate.passage_id == result.relevant_passage.passage_id
                     and candidate.exact_quote in result.relevant_passage.text
                     and (
@@ -703,7 +717,13 @@ class MonitorService:
                 else:
                     run.rejected_impacts += 1
             except Exception:
+                run.rejected_impacts += 1
                 run.errors.append("Structured impact judgment failed safely.")
+            finally:
+                if usage is not None:
+                    run.llm_calls += max(0, usage.calls - prior_calls - 1)
+                    run.input_tokens += usage.input_tokens - prior_input
+                    run.output_tokens += usage.output_tokens - prior_output
         if judgment is not None:
             if judgment.category in {"NO_MATERIAL_EFFECT", "INSUFFICIENT_EVIDENCE"}:
                 return
@@ -898,6 +918,16 @@ def apply_alert(store: MatterStore, matter_id: str, alert_id: str) -> MatterAler
                 evidence_id=evidence_id,
             )
         )
+        # New evidence invalidates the old assessment; it does not establish a
+        # replacement legal conclusion without normal claim reanalysis.
+        claim.verification_state = "INSUFFICIENT_EVIDENCE"
+        finding.verification_status = "INSUFFICIENT_EVIDENCE"
+        finding.vulnerability = "INSUFFICIENT_EVIDENCE"
+        finding.explanation = (
+            "Monitoring evidence was applied; reanalyze this claim before relying "
+            "on its previous assessment."
+        )
+        store.update_claim(claim)
         store.update_finding(finding)
         matter = store.get_matter(matter_id)
         if matter is None:

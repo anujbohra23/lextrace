@@ -33,3 +33,16 @@ Stage 2 sends a bounded claim, prior finding evidence, exact new passage, court 
 V1 limits new cases, Matters, watched authority IDs, candidates per target, Stage 2 analyses, LLM calls, output tokens per provider call, and runtime. Reported total token usage is checked between calls; exact provider-side input tokens cannot be hard-capped without a model tokenizer. Graph comparison is bounded to watched authorities and up to 100 incoming edges per authority; it is not a complete historical graph migration audit. Changed source records are reported separately and not treated as newly added authority. Synthetic golden fixtures in `tests/fixtures/monitoring_golden.json` cover twelve scenarios without network access.
 
 The standard Docker backend pins a CPU PyTorch wheel from the official CPU wheel index before installing LexTrace retrieval extras. This prevents pip from selecting CUDA dependencies on Linux while leaving the macOS editable-install path unchanged. The CPU wheel and package resolver remain checked by a real Compose build and health test.
+
+Stage 2 generation uses an explicit ledger of canonical claim, case, passage, and
+evidence IDs. Positive impact judgments must include their candidate passage in
+`evidence_ids`; no-effect and insufficient-evidence judgments may leave that list
+empty. An untrusted generation draft may receive one reference-only repair before
+typed and run-local reference validation. The deterministic provenance and legal
+checks still decide acceptance. Relevance alone remains informational.
+
+Applying substantive evidence invalidates the affected claim's previous support
+and vulnerability assessment, Doctrine state, and research/attack caches. The
+evidence and authority links remain available, and coverage is reassessed. Normal
+claim reanalysis is required before relying on a new assessment; unrelated claims
+are unchanged.

@@ -191,6 +191,7 @@ class FakeJudge:
     def judge(self, evidence: MonitoringEvidence) -> ImpactJudgment:
         result = evidence.result
         return ImpactJudgment(
+            claim_id=evidence.claim.claim_id,
             case_id=result.case_id,
             passage_id=result.relevant_passage.passage_id,
             category="WEAKENS",
@@ -219,6 +220,7 @@ class ScenarioJudge:
             }[self.category],
         )
         return ImpactJudgment(
+            claim_id=evidence.claim.claim_id,
             case_id=result.case_id,
             passage_id=result.relevant_passage.passage_id,
             category=category,
