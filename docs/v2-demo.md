@@ -1,5 +1,8 @@
 # LexTrace v2 product walkthrough
 
+LexTrace v2 Engineering release status: **PASS_WITH_LIMITATIONS**.
+**LEXTRACE V2 ENGINEERING: FROZEN.**
+
 This walkthrough uses a **synthetic Matter document**. The local CourtListener
 index supplies the authority evidence; its small scope can leave research gaps.
 No private brief or provider output is needed to read this story.
@@ -35,3 +38,40 @@ provider. The walkthrough can use host-local Ollama (`qwen3:8b`) without paid
 provider credits; the optional OpenAI-compatible provider requires its own
 credentials and availability. Local retrieval, graph coverage, and model
 judgments are limited; LexTrace does not replace legal review.
+
+## Deep Research control and evidence flow
+
+Matter Deep Research uses the following bounded design:
+
+```text
+deterministic research plan and lawyer approval
+    -> LexTrace retrieval and evidence acquisition
+    -> model-supported evidence analysis/findings where configured
+    -> deterministic reference/provenance verification
+    -> coverage reassessment and bounded stopping
+```
+
+The planner and executor are deterministic, not an autonomous LLM-planned agent
+loop. Model analysis is separate from execution control; this diagram does not
+imply an LLM call on every research round. The separate `/research` memo workflow
+has its own structured model planning. Fixed bounds and visible retrieval steps
+support reproducibility, predictable cost, auditable execution, and deterministic
+control around generative analysis.
+
+Release validation processed a real-Qwen-produced finding through the production
+Deep Research graph: one query, one round, one discovery, and `LIMIT_REACHED`.
+Planner/executor LLM calls were zero by design. Real local `qwen3:8b` also completed
+X-Ray, Red Team, evidence-bound material monitoring, and adversarial-document
+validation; the verified material alert was reviewed and applied through the UI.
+These are engineering smoke checks, not evidence of retrieval quality or legal
+correctness. Generated release data remains private and ignored by Git.
+
+## Release limitations
+
+Local inference can be slow. Research remains bounded by the small indexed corpus
+and incomplete citation/treatment coverage. Qwen can misclassify document text or
+misinterpret real passages; the adversarial check exposed a malicious instruction
+treated as a partly supported claim. No fabricated authority reached verified
+evidence in the audited runs, but valid provenance alone does not establish legal
+correctness. Qwen3 8B is not a legal expert, and the system is not a comprehensive
+citator. Review findings and exact evidence before relying on them.

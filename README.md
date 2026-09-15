@@ -10,6 +10,10 @@ Matter-to-monitoring flow, or follow [Run locally](#run-locally) to launch the
 API and web workspace. LexTrace is an engineering prototype over a local,
 incomplete corpus; its findings require lawyer review.
 
+**LexTrace v2 Engineering release status: PASS_WITH_LIMITATIONS.**
+**LEXTRACE V2 ENGINEERING: FROZEN.** The release validates engineering workflows,
+not production legal correctness or comprehensive citator coverage.
+
 LexTrace v2 adds a private Matter Workspace and Argument X-Ray for litigation
 documents. Upload a PDF, DOCX, TXT, or Markdown brief; inspect legal issues and
 claims against their exact source spans; resolve cited reporter references into
@@ -32,6 +36,14 @@ exports structured references as CSV. Coverage refers only to the local index;
 attack severity is not a prediction of a court's decision. See
 [Deep Research architecture and limits](docs/v2-deep-research.md).
 
+Matter **Deep Research** uses deterministic bounded planning, lawyer-approved
+retrieval steps, evidence acquisition through LexTrace retrieval, coverage
+reassessment, and bounded stopping. Model-supported evidence analysis and findings
+are used where configured; the planner and executor do not call an LLM or freely
+choose execution steps. This separation supports reproducibility, predictable
+cost, bounded execution, and auditable retrieval around generative analysis.
+The separate `/research` question-to-memo workflow uses structured model planning.
+
 LexTrace turns a legal question into a bounded research plan, retrieves exact
 passages from real judicial decisions, inspects citation relationships, drafts
 competing analyses, and verifies every substantive claim against run-local
@@ -51,7 +63,10 @@ or replace professional legal advice.
 Build a local index first, then start both services with `docker compose up
 --build`. Open `http://localhost:3000`, create a matter, and upload a small legal
 document. Analysis runs in a bounded background job; it requires
-`OPENAI_API_KEY` and `LEXTRACE_LLM_MODEL` in your local ignored `.env`. Search and
+`LEXTRACE_LLM_MODEL` and a configured provider. Host-local Ollama uses
+`LEXTRACE_LLM_PROVIDER=ollama` and `qwen3:8b` without an OpenAI key; the
+OpenAI-compatible provider requires `OPENAI_API_KEY`. Compose reads your ignored
+`.env`; host CLI/API processes require exported settings. Search and
 matter creation do not need an LLM key. Uploaded documents and their local
 structured cache live under the private runtime directory, not the public case
 corpus. Deleting a matter removes its files and analysis records when no job is
@@ -126,7 +141,9 @@ named volumes. See [Engineering v1 operations](docs/engineering-v1.md).
 
 ## Grounded legal research workflow
 
-The research layer orchestrates the existing retrieval engine and citation graph;
+This CLI and `/research` question-to-memo workflow is separate from Matter Deep
+Research's deterministic planner/executor. The research layer orchestrates the
+existing retrieval engine and citation graph;
 it does not own indexes or graph storage. Install the `research` extra, export an
 API-compatible credential and an explicit model ID, then run:
 
@@ -183,6 +200,14 @@ advice. Results are limited by the local corpus, retrieval recall, source qualit
 provider reliability, conservative and incomplete treatment classification,
 and the lack of statistically calibrated confidence. It is not a comprehensive
 citator and does not predict legal outcomes.
+
+The v2 release's known limitations include local Qwen inference latency, the small
+engineering corpus, corpus-bounded research, incomplete citation/treatment
+coverage, and deterministic Matter Deep Research orchestration. Qwen3 8B is not a
+legal expert: semantic misclassification can occur, including treating adversarial
+document instructions as claims. Deterministic verification checks canonical
+references and provenance; it does not guarantee the legal meaning of a model's
+interpretation. Lawyer review remains necessary.
 
 ## Ingest one case
 
