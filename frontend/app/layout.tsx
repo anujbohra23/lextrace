@@ -8,5 +8,5 @@ export const metadata: Metadata = {
 };
 
 export default function Layout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="en"><body><header><Link className="brand" href="/">LexTrace<span>Litigation Argument Intelligence</span></Link><nav><Link href="/matters">Matters</Link><Link href="/research">Research</Link><Link href="/search">Search</Link></nav></header><main>{children}</main><footer>Legal research and information — not a substitute for professional legal advice.</footer></body></html>;
+  return <html lang="en"><body><header><Link className="brand" href="/">LexTrace<span>Litigation Argument Intelligence</span></Link><nav><Link href="/matters">My matters</Link><Link href="/research">Research</Link><Link href="/search">Find cases</Link></nav></header><main>{children}</main><footer>Legal research and information — not a substitute for professional legal advice.</footer></body></html>;
 }

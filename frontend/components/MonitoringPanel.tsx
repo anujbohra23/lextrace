@@ -83,12 +83,12 @@ export function MonitoringPanel({ matterId, onUpdate, openClaim }: {
       <article><h3>Watching</h3><p>{overview?.targets.filter((item) => item.enabled).length ?? 0} targets · {overview?.unread_alert_count ?? 0} unread alerts</p>
         {overview?.targets.map((target) => <p key={target.target_id}>{target.target_type} {target.target_reference_id} · {target.enabled ? "Watching" : "Paused"} {target.automatic ? "(automatic)" : ""}</p>)}
       </article>
-      <article><h3>Check a new corpus snapshot</h3><p>Point to a prepared JSONL file under backend data/. Index and graph rebuilds are separate explicit steps.</p>
+      <article><details><summary>Administrator: update source snapshot</summary><h3>Check a new corpus snapshot</h3><p>Point to a prepared JSONL file under backend data/. Index and graph rebuilds are separate explicit steps.</p>
         <input aria-label="New corpus path" value={corpusPath} placeholder="data/updated_cases.jsonl" onChange={(event) => setCorpusPath(event.target.value)} />
         <label><input type="checkbox" checked={useImpactModel} onChange={(event) => setUseImpactModel(event.target.checked)} /> Use configured impact model for bounded Stage 2 review</label>
         <button disabled={!corpusPath || run?.status === "running" || run?.status === "queued"} onClick={() => void startRun()}>Run monitoring</button>
         {run && <p role="status">{run.status} · {run.outcome ?? "checking"} · {run.new_cases_examined} new cases · {run.alerts_created} new alerts</p>}
-      </article>
+      </details></article>
     </div>
     <h3>Monitoring history</h3>
     {overview?.recent_runs.length ? overview.recent_runs.map((item) => <p key={item.run_id}>

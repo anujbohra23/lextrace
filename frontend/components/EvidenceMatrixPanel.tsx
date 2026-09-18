@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { label } from "@/lib/labels";
 import { API_URL } from "@/lib/api";
 import { MatrixRow } from "@/lib/deepResearch";
 import { MatterAlert, MonitoringTarget } from "@/lib/monitoring";
@@ -21,13 +22,15 @@ const severityOrder: Record<string, number> = {
 };
 
 export function EvidenceMatrixPanel({
-  matterId, rows, openClaim, alerts = [], targets = [],
+  matterId, rows, openClaim, alerts = [], targets = [], caseNames = {}, reviewedClaims = [],
 }: {
   matterId: string; rows: MatrixRow[]; openClaim: (claimId: string) => void;
-  alerts?: MatterAlert[]; targets?: MonitoringTarget[];
+  reviewedClaims?: string[]; caseNames?: Record<string, string>; alerts?: MatterAlert[]; targets?: MonitoringTarget[];
 }) {
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [sort, setSort] = useState("vulnerability");
+  const [advanced, setAdvanced] = useState(false);
+  const caseName = (id: string | null) => id ? caseNames[id] ?? "Unresolved authority" : "None found";
   const [showChange, setShowChange] = useState(false);
   const options = (field: keyof MatrixRow): string[] => [
     ...new Set(rows.map((row) => row[field]).filter((value): value is string => typeof value === "string")),
@@ -52,28 +55,33 @@ export function EvidenceMatrixPanel({
     });
   }, [filters, rows, sort]);
 
-  function select(label: string, key: keyof Filters, values: string[]) {
-    return <label>{label}<select value={String(filters[key])} onChange={(event) => setFilters({ ...filters, [key]: event.target.value })}>
-      <option value="ALL">All</option>{values.map((value) => <option key={value} value={value}>{value}</option>)}
+  function select(title: string, key: keyof Filters, values: string[]) {
+    return <label>{title}<select value={String(filters[key])} onChange={(event) => setFilters({ ...filters, [key]: event.target.value })}>
+      <option value="ALL">All</option>{values.map((value) => <option key={value} value={value}>{key === "document" ? rows.find(row => row.document_id === value)?.document_name : key === "issue" ? rows.find(row => row.issue_id === value)?.issue : label(value)}</option>)}
     </select></label>;
   }
-  return <section className="workspace" aria-label="Evidence Matrix v2">
-    <h2>Evidence Matrix v2</h2><p>Claim support, research coverage, and attack severity are separate signals. Select a claim for source passages and research history.</p>
+  return <section className="workspace" aria-label="Claim review">
+    <h2>Review claims</h2><p>Assessments are model suggestions, not reviewed legal conclusions. Select a claim to compare it with the original text and evidence.</p>
     <div className="matrix-controls">
-      {select("Issue", "issue", options("issue_id"))}
+      {advanced && select("Issue", "issue", options("issue_id"))}
       {select("Claim status", "status", options("argument_status"))}
-      {select("Authority", "authority", options("authority_category"))}
-      {select("Citation support", "citation", options("citation_support"))}
+      {advanced && select("Authority", "authority", options("authority_category"))}
+      {advanced && select("Citation support", "citation", options("citation_support"))}
       {select("Coverage", "coverage", options("coverage"))}
-      {select("Attack severity", "severity", options("attack_severity"))}
-      {select("Document", "document", options("document_id"))}
+      {advanced && select("Attack severity", "severity", options("attack_severity"))}
+      {advanced && select("Document", "document", options("document_id"))}
       <label><input type="checkbox" checked={filters.unresolved} onChange={(event) => setFilters({ ...filters, unresolved: event.target.checked })} /> Unresolved gaps only</label>
       <label>Sort<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="vulnerability">Vulnerability</option><option value="coverage">Coverage</option><option value="issue">Issue</option><option value="authority">Authority</option><option value="importance">Importance</option></select></label>
+      <label><input type="checkbox" checked={advanced} onChange={event => setAdvanced(event.target.checked)} /> Advanced details</label>
       <label><input type="checkbox" checked={showChange} onChange={(event) => setShowChange(event.target.checked)} /> Show change columns</label>
       <a href={`${API_URL}/matters/${matterId}/evidence-matrix.csv`}>Export CSV</a>
     </div>
-    <div className="matrix-scroll"><table className="evidence-matrix"><thead><tr><th>Issue</th><th>Claim</th><th>Source</th><th>Matter evidence</th><th>Cited authority</th><th>Citation support</th><th>Authority status</th><th>Strongest support</th><th>Strongest counter</th><th>Later treatment</th><th>Doctrine state</th><th>Coverage</th><th>Red Team</th><th>Argument status</th><th>Gaps</th>{showChange && <><th>Last checked</th><th>New authority</th><th>Change impact</th><th>Alert status</th></>}</tr></thead><tbody>
-      {visible.map((row) => { const latest = alerts.find((alert) => alert.claim_id === row.claim_id); const target = targets.find((item) => item.target_type === "CLAIM" && item.target_reference_id === row.claim_id); return <tr key={row.claim_id}><td>{row.issue}</td><td><button className="link-button" onClick={() => openClaim(row.claim_id)}>{row.claim}</button></td><td>{row.document_name} · {row.source_start}–{row.source_end}</td><td>{row.matter_evidence_ids?.length ? `${row.matter_evidence_ids.length} linked facts` : "None recorded"}</td><td>{row.cited_case_ids.join(", ") || "None"}</td><td>{row.citation_support}</td><td>{row.authority_category}</td><td>{row.strongest_support_case_id ?? "None"}</td><td>{row.strongest_counter_case_id ?? "None"}</td><td>{row.later_treatment?.join(", ") || "Not reviewed"}</td><td>{row.doctrine_state}</td><td>{row.coverage}</td><td>{row.attack_severity ?? "None verified"}</td><td>{row.argument_status}</td><td>{row.gaps.join(", ") || "None recorded"}</td>{showChange && <><td>{target?.last_checked_at?.slice(0, 10) ?? "Not checked"}</td><td>{latest?.new_case_id ?? "None"}</td><td>{latest?.title ?? "No material change"}</td><td>{latest?.review_state ?? "None"}</td></>}</tr>; })}
+    <div className="matrix-scroll"><table className="evidence-matrix review-table"><thead><tr><th>Claim</th><th>Proposed assessment</th><th>Evidence</th><th>Coverage</th><th>Next action</th>{advanced && <><th>Source</th><th>Citation support</th><th>Authority</th><th>Counterargument severity</th></>}{showChange && <><th>Last checked</th><th>Change</th></>}</tr></thead><tbody>
+      {visible.map(row => { const latest = alerts.find(alert => alert.claim_id === row.claim_id); const target = targets.find(item => item.target_reference_id === row.claim_id); return <tr key={row.claim_id}>
+        <td><button className="link-button" onClick={() => openClaim(row.claim_id)}>{row.claim}</button></td><td>{label(row.argument_status)}<small className="review-state">{reviewedClaims.includes(row.claim_id) ? "Reviewed by you" : "Needs your review"}</small></td><td>{caseName(row.strongest_support_case_id)}</td><td>{label(row.coverage)}</td><td>{row.gaps.length ? row.gaps.map(label).join("; ") : "Review passages and assessment"}</td>
+        {advanced && <><td>{row.document_name}</td><td>{label(row.citation_support)}</td><td>{label(row.authority_category)}</td><td>{row.attack_severity ? label(row.attack_severity) : "Not assessed"}</td></>}
+        {showChange && <><td>{target?.last_checked_at?.slice(0,10) ?? "Not checked"}</td><td>{latest?.title ?? "No recorded change"}</td></>}
+      </tr>; })}
     </tbody></table></div>
     {visible.length === 0 && <p>No claims match these filters.</p>}
   </section>;

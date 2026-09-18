@@ -27,11 +27,11 @@ it("requires approval before starting bounded research and displays verified att
   expect(screen.getByText(/No contrary authority recorded/)).toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Create research plan" }));
   await waitFor(() => expect(screen.getByText(/Review research plan/)).toBeInTheDocument());
-  expect(screen.getByRole("button", { name: "Run Deep Research" })).toBeDisabled();
+  expect(screen.getByRole("button", { name: "Investigate this claim" })).toBeDisabled();
   fireEvent.click(screen.getByRole("checkbox"));
   fireEvent.click(screen.getByRole("button", { name: "Approve plan" }));
-  await waitFor(() => expect(screen.getByRole("button", { name: "Run Deep Research" })).toBeEnabled());
-  fireEvent.click(screen.getByRole("button", { name: "Run Deep Research" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: "Investigate this claim" })).toBeEnabled());
+  fireEvent.click(screen.getByRole("button", { name: "Investigate this claim" }));
   await waitFor(() => expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("/deep-research"), expect.anything()));
   expect(screen.getByText(/Not controlling/)).toBeInTheDocument();
 });

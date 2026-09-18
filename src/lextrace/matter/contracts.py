@@ -103,6 +103,8 @@ class LegalClaim(Record):
     irrelevant: bool = False
     manually_edited: bool = False
     wording_locked: bool = False
+    reviewed: bool = False
+    review_notes: str = Field(default="", max_length=4000)
 
 
 class DocumentCitation(Record):

@@ -126,6 +126,11 @@ class ClaimEdit(Record):
     wording_locked: bool | None = None
 
 
+class ClaimReview(Record):
+    reviewed: bool
+    notes: str = Field(default="", max_length=4000)
+
+
 class PlanEdit(Record):
     steps: list[ResearchStep] | None = None
     approve: bool = False
@@ -347,7 +352,9 @@ def create_app(
                 owned_cache = StructuredCache(configured.cache_db)
                 jobs = ResearchJobs(
                     ResearchWorkflow(
-                        get_engine(), CachedStructuredLLM(provider, owned_cache)
+                        get_engine(),
+                        CachedStructuredLLM(provider, owned_cache),
+                        observer=owned_store,
                     ),
                     owned_store,
                     max_workers=configured.max_concurrent_research,
@@ -414,6 +421,19 @@ def create_app(
                 status_code=503, detail="Retrieval engine unavailable."
             ) from error
         return {"status": "ready"}
+
+    @application.get("/corpus/coverage")
+    def corpus_coverage() -> dict[str, object]:
+        cases = list(get_engine().corpus.by_id.values())
+        dates = sorted(case.date_filed for case in cases if case.date_filed)
+        courts = sorted({case.court_id for case in cases})
+        return {
+            "case_count": len(cases),
+            "courts": courts,
+            "earliest_date": dates[0].isoformat() if dates else None,
+            "latest_date": dates[-1].isoformat() if dates else None,
+            "scope": "Local collection only; not comprehensive or live-updated.",
+        }
 
     @application.post("/matters", status_code=201)
     def create_matter(request: MatterCreate) -> dict[str, object]:
@@ -510,6 +530,16 @@ def create_app(
             "claim": claim.model_dump(mode="json"),
             "finding": finding.model_dump(mode="json") if finding else None,
         }
+
+    @application.patch("/matters/{matter_id}/claims/{claim_id}/review")
+    def review_claim(
+        matter_id: str, claim_id: str, request: ClaimReview
+    ) -> dict[str, object]:
+        return (
+            get_matter_store()
+            .set_claim_review(matter_id, claim_id, request.reviewed, request.notes)
+            .model_dump(mode="json")
+        )
 
     @application.patch("/matters/{matter_id}/claims/{claim_id}")
     def edit_claim(
@@ -655,7 +685,12 @@ def create_app(
         "/research", response_model=RunAccepted, status_code=status.HTTP_202_ACCEPTED
     )
     def research(request: ResearchRequest) -> RunAccepted:
-        return RunAccepted(run_id=get_jobs().submit(request))
+        try:
+            return RunAccepted(run_id=get_jobs().submit(request))
+        except ResearchError:
+            raise HTTPException(
+                status_code=429, detail="Research queue is full. Try again later."
+            ) from None
 
     @application.get("/research/{run_id}")
     def research_result(run_id: str) -> dict[str, object]:
@@ -668,6 +703,11 @@ def create_app(
             return {
                 "run_id": run_id,
                 "status": row["status"],
+                "created_at": row["created_at"],
+                "completed_at": row["completed_at"],
+                "error_code": row["error_code"],
+                "progress": current.store.trace(run_id),
+                "can_resume": current.store.request(run_id) is not None,
                 "result": result.model_dump(mode="json") if result else None,
             }
         except ResearchError as error:
@@ -688,6 +728,16 @@ def create_app(
     @application.get("/runs")
     def runs(limit: int = Query(default=20, ge=1, le=100)) -> list[dict[str, object]]:
         return get_jobs().store.list(limit)
+
+    @application.post("/research/{run_id}/stop")
+    def stop_research(run_id: str) -> dict[str, str]:
+        try:
+            get_jobs().stop(run_id)
+        except ResearchError:
+            raise HTTPException(
+                status_code=409, detail="Research cannot be stopped."
+            ) from None
+        return {"run_id": run_id}
 
     @application.post("/research/{run_id}/resume", response_model=RunAccepted)
     def resume(run_id: str) -> RunAccepted:

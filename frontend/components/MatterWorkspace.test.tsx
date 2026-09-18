@@ -22,7 +22,7 @@ it("creates a matter and links to its workspace", async () => {
   expect(screen.getByRole("link", { name: /Smith v. Example/ })).toHaveAttribute("href", `/matters/${"a".repeat(32)}`);
 });
 
-it("shows X-Ray evidence and highlights the exact source span", async () => {
+it("shows Review evidence and highlights the exact source span", async () => {
   const matterId = "a".repeat(32);
   const source = "A legal proposition appears here. Extra text.";
   const span = { document_id: "b".repeat(32), section_id: "c".repeat(24), start: 0, end: 31, page: 1 };
@@ -42,6 +42,9 @@ it("shows X-Ray evidence and highlights the exact source span", async () => {
   vi.stubGlobal("fetch", vi.fn(async (url: string) => {
     if (url.endsWith("/documents")) return json([{ document_id: span.document_id, filename: "brief.txt", document_type: "txt", ingestion_status: "READY", page_count: null, text_length: source.length }]);
     if (url.endsWith(`/documents/${span.document_id}`)) return json({ document: { document_id: span.document_id }, text: source, sections: [] });
+    if (url.endsWith("/alerts")) return json([]);
+    if (url.endsWith("/monitoring")) return json({targets: [], unread_alert_count: 0, recent_runs: []});
+    if (url.endsWith("/evidence-matrix")) return json([{claim_id: claim.claim_id, claim: claim.normalized_proposition, document_id: span.document_id, document_name: "brief.txt", issue: "Issue", gaps: [], coverage: "PARTIAL", argument_status: "STRONG", authority_category: "UNKNOWN", citation_support: "SUPPORTED", strongest_support_case_id: "1", attack_severity: null}]);
     if (url.endsWith("/claims")) return json([claim]);
     if (url.endsWith("/issues")) return json([{ issue_id: claim.issue_id, label: "Issue", section_ids: [], research_topics: [], uncertainty: null }]);
     if (url.endsWith("/argument-xray")) return json([finding]);
@@ -49,9 +52,13 @@ it("shows X-Ray evidence and highlights the exact source span", async () => {
   }));
   render(<MatterWorkspace matterId={matterId} />);
   await waitFor(() => expect(screen.getByText("Test matter")).toBeInTheDocument());
-  fireEvent.click(screen.getByRole("tab", { name: "Argument X-Ray" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Review" }));
   fireEvent.click(screen.getByRole("button", { name: "A legal proposition appears here." }));
   await waitFor(() => expect(screen.getByText("The exact precedent passage.")).toBeInTheDocument());
   expect(screen.getByText(source.slice(0, 31))).toHaveProperty("tagName", "MARK");
   expect(screen.getAllByText("Smith v. Example")).toHaveLength(2);
+  fireEvent.click(screen.getByRole("button", {name: "Close"}));
+  fireEvent.click(screen.getByRole("button", {name: "Export review report"}));
+  expect((screen.getByLabelText("Report text") as HTMLTextAreaElement).value).toContain("The exact precedent passage.");
+  expect(screen.getByRole("link", {name: "Download Markdown report"})).toHaveAttribute("download", "lextrace-review.md");
 });

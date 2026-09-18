@@ -87,6 +87,35 @@ class RunStore:
                 """
             )
 
+    def emit(self, event: str, attributes: dict[str, object]) -> None:
+        """Persist only safe workflow stage metadata for an active run."""
+        run_id, node = attributes.get("run_id"), attributes.get("node")
+        if not isinstance(run_id, str) or not isinstance(node, str):
+            return
+        if event not in {"node.started", "node.completed", "node.failure"}:
+            return
+        self.validate_id(run_id)
+        current = self.get(run_id)
+        if current and current["status"] == "stopping":
+            raise ResearchError("Research stopped by user.")
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE research_runs SET trace_json=? "
+                "WHERE run_id=? AND status='running'",
+                (
+                    json.dumps({"stage": node, "event": event, "updated_at": _now()}),
+                    run_id,
+                ),
+            )
+
+    def recover_interrupted(self) -> None:
+        with self._lock, self._db:
+            self._db.execute(
+                "UPDATE research_runs SET status='failed', error_code='interrupted', "
+                "completed_at=? WHERE status IN ('queued','running','stopping')",
+                (_now(),),
+            )
+
     @staticmethod
     def validate_id(run_id: str) -> str:
         if not RUN_ID.fullmatch(run_id):
@@ -376,23 +405,55 @@ class ResearchJobs:
             max_workers=max_workers, thread_name_prefix="lextrace-research"
         )
         self._futures: dict[str, Future[None]] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
+        self.store.recover_interrupted()
 
     def submit(self, request: ResearchRequest, *, run_id: str | None = None) -> str:
-        identifier = run_id or uuid.uuid4().hex
-        if run_id is None:
-            self.store.create(identifier, request)
-        future = self._executor.submit(self._execute, identifier, request)
         with self._lock:
+            active = sum(not future.done() for future in self._futures.values())
+            if active >= 4:
+                raise ResearchError("Research queue is full. Wait for an existing run.")
+            identifier = run_id or uuid.uuid4().hex
+            if identifier in self._futures and not self._futures[identifier].done():
+                raise ResearchError("Research run is already active.")
+            if run_id is None:
+                self.store.create(identifier, request)
+            else:
+                self.store._status(identifier, "queued", None)
+            future = self._executor.submit(self._execute, identifier, request)
             self._futures[identifier] = future
-        return identifier
+            return identifier
 
     def _execute(self, run_id: str, request: ResearchRequest) -> None:
-        self.store.mark_running(run_id)
+        with self._lock:
+            if (self.store.get(run_id) or {}).get("status") == "stopping":
+                self.store.fail(run_id, "cancelled")
+                return
+            self.store.mark_running(run_id)
         try:
-            self.store.complete(self.workflow.run(request, run_id=run_id))
+            result = self.workflow.run(request, run_id=run_id)
+            with self._lock:
+                if (self.store.get(run_id) or {}).get("status") == "stopping":
+                    self.store.fail(run_id, "cancelled")
+                else:
+                    self.store.complete(result)
         except Exception:
-            self.store.fail(run_id)
+            with self._lock:
+                stopped = (self.store.get(run_id) or {}).get("status") == "stopping"
+                self.store.fail(run_id, "cancelled" if stopped else "workflow_failed")
+
+    def stop(self, run_id: str) -> None:
+        with self._lock:
+            row = self.store.get(run_id)
+            if row is None:
+                raise ResearchError("Research run was not found.")
+            if row["status"] not in {"queued", "running", "stopping"}:
+                raise ResearchError("Research run is not active.")
+            future = self._futures.get(run_id)
+            if future is not None and future.cancel():
+                self.store.fail(run_id, "cancelled")
+            else:
+                self.store._status(run_id, "stopping")
 
     def resume(self, run_id: str) -> str:
         row = self.store.get(run_id)
@@ -403,7 +464,6 @@ class ResearchJobs:
             raise ResearchError("Research run is not resumable.")
         if request is None:
             raise ResearchError("Research content persistence is disabled.")
-        self.store._status(run_id, "queued", None)
         return self.submit(request, run_id=run_id)
 
     def close(self) -> None:

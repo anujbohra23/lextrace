@@ -17,7 +17,7 @@ export type Claim = {
   claim_id: string; document_id: string; issue_id: string | null;
   exact_source_text: string; normalized_proposition: string; span: Span;
   verification_state: string; irrelevant: boolean; manually_edited: boolean;
-  wording_locked?: boolean;
+  wording_locked?: boolean; reviewed?: boolean; review_notes?: string;
 };
 export type Issue = { issue_id: string; label: string; uncertainty: string | null; section_ids: string[]; research_topics: string[] };
 export type Evidence = {

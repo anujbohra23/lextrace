@@ -190,6 +190,23 @@ def test_background_xray_and_manual_edit(
         claim_id = findings[0]["claim_id"]
         assert findings[0]["evidence"][0]["result"]["case_id"] == "1"
         assert client.get(f"/matters/{matter_id}/claims/{claim_id}").json()["finding"]
+        coverage = client.get("/corpus/coverage").json()
+        assert coverage["case_count"] == 1
+        assert coverage["courts"] == ["ca2"]
+        assert coverage["latest_date"] == "2009-01-01"
+        reviewed = client.patch(
+            f"/matters/{matter_id}/claims/{claim_id}/review",
+            json={"reviewed": True, "notes": "Checked the exact passage."},
+        )
+        assert reviewed.status_code == 200 and reviewed.json()["reviewed"]
+        assert client.get(f"/matters/{matter_id}/argument-xray").json() == findings
+        assert (
+            client.patch(
+                f"/matters/{matter_id}/claims/{claim_id}/review",
+                json={"reviewed": True, "notes": "x" * 4001},
+            ).status_code
+            == 422
+        )
         cited = findings[0]["cited_authorities"][0]
         review = client.patch(
             f"/matters/{matter_id}/claims/{claim_id}/authorities/1",
@@ -207,4 +224,6 @@ def test_background_xray_and_manual_edit(
         )
         assert edited.json()["exact_source_text"].startswith("A plaintiff")
         assert edited.json()["manually_edited"]
+        assert edited.json()["reviewed"] is False
+        assert edited.json()["review_notes"] == "Checked the exact passage."
         assert client.get(f"/matters/{matter_id}/argument-xray").json() == []

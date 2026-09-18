@@ -2,13 +2,14 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, expect, test, vi } from "vitest";
 import { ResearchView, Result } from "./ResearchView";
 
-afterEach(() => vi.restoreAllMocks());
+vi.mock("next/navigation", () => ({useRouter: () => ({push: vi.fn()})}));
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 test("accepts research input and shows loading", async () => {
   vi.stubGlobal("fetch", vi.fn(() => new Promise(() => undefined)));
   render(<ResearchView />);
   fireEvent.change(screen.getByLabelText("Legal question or fact pattern"), {target: {value: "A legal question"}});
-  fireEvent.click(screen.getByRole("button", {name: "Research"}));
+  fireEvent.click(screen.getByRole("button", {name: "Start research"}));
   expect(await screen.findByText("Researching…")).toBeDisabled();
 });
 

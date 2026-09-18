@@ -134,3 +134,63 @@ def test_background_completion_failure_and_unique_ids(
     assert "private dependency detail" not in str(failed_row)
     failed.close()
     store.close()
+
+
+def test_progress_redacts_unlisted_attributes_and_recovers_interruption(
+    tmp_path: Path,
+) -> None:
+    store = RunStore(tmp_path / "progress.sqlite3")
+    run_id = "c" * 32
+    store.create(run_id, ResearchRequest(question="Synthetic question"))
+    store.mark_running(run_id)
+    store.emit(
+        "node.started", {"run_id": run_id, "node": "retrieval", "token": "secret-value"}
+    )
+    trace = store.trace(run_id)
+    assert trace and trace["stage"] == "retrieval"
+    assert "secret-value" not in str(trace)
+    store.recover_interrupted()
+    row = store.get(run_id)
+    assert row and row["status"] == "failed" and row["error_code"] == "interrupted"
+    store.close()
+
+
+def test_queue_bound_and_stop_preserve_existing_work(
+    tmp_path: Path, empty_research_response: ResearchResponse
+) -> None:
+    import threading
+
+    import pytest
+
+    from lextrace.research.contracts import ResearchError
+
+    entered, release = threading.Event(), threading.Event()
+
+    class BlockingWorkflow(FakeWorkflow):
+        def run(
+            self, request: ResearchRequest, *, run_id: str | None = None
+        ) -> ResearchResponse:
+            entered.set()
+            assert release.wait(5)
+            return super().run(request, run_id=run_id)
+
+    store = RunStore(tmp_path / "bounded.sqlite3")
+    jobs = ResearchJobs(BlockingWorkflow(empty_research_response), store)
+    try:
+        request = ResearchRequest(question="Synthetic")
+        first = jobs.submit(request)
+        assert entered.wait(2)
+        queued = [jobs.submit(request) for _ in range(3)]
+        with pytest.raises(ResearchError, match="queue is full"):
+            jobs.submit(request)
+        jobs.stop(queued[0])
+        assert (store.get(queued[0]) or {})["error_code"] == "cancelled"
+        jobs.stop(first)
+        assert (store.get(first) or {})["status"] == "stopping"
+        release.set()
+        jobs._futures[first].result(timeout=2)
+        assert (store.get(first) or {})["error_code"] == "cancelled"
+    finally:
+        release.set()
+        jobs.close()
+        store.close()

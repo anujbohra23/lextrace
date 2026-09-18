@@ -18,9 +18,9 @@ export function DeepResearchPanel({ matterId, claimId, onUpdate }: { matterId: s
         api<Coverage>(`${base}/research-coverage`), api<Attack[]>(`${base}/attacks`),
       ]);
       if (!Array.isArray(nextCoverage?.gaps) || !Array.isArray(nextAttacks)) throw new Error("Invalid research details.");
-      setCoverage(nextCoverage); setAttacks(nextAttacks);
+      setCoverage(nextCoverage); setAttacks(nextAttacks); setError("");
       try { setPlan(await api<Plan>(`${base}/research-plan`)); } catch { setPlan(null); }
-    } catch { setError("Research details are unavailable until this claim has been analyzed."); }
+    } catch { setError("Research details could not be loaded. Close this claim and reopen it to retry."); }
   }, [base]);
   useEffect(() => { void Promise.resolve().then(refresh); }, [refresh]);
   useEffect(() => {
@@ -83,9 +83,9 @@ export function DeepResearchPanel({ matterId, claimId, onUpdate }: { matterId: s
       <h4>Research gaps</h4><ul>{coverage.gaps.map((gap) => <li key={gap.gap_id}><strong>{gap.type.replaceAll("_", " ")}</strong> · {gap.explanation}</li>)}</ul></>}
     {!plan ? <button onClick={() => void createPlan()}>Create research plan</button> : <><h4>Review research plan · {plan.status}</h4>
       {plan.steps.map((step) => <article className="precedent-card" key={step.step_id}><label><input type="checkbox" checked={step.approved} onChange={(event) => setPlan({ ...plan, status: "DRAFT", steps: plan.steps.map((item) => item.step_id === step.step_id ? { ...item, approved: event.target.checked } : item) })} /> {step.intent.replaceAll("_", " ")}</label><input aria-label={`Query ${step.step_id}`} value={step.query} onChange={(event) => setPlan({ ...plan, status: "DRAFT", steps: plan.steps.map((item) => item.step_id === step.step_id ? { ...item, query: event.target.value } : item) })} /><button onClick={() => setPlan({ ...plan, status: "DRAFT", steps: plan.steps.filter((item) => item.step_id !== step.step_id) })}>Remove step</button></article>)}
-      <div className="review-actions"><button disabled={plan.steps.length >= 12 || !coverage?.gaps.length} onClick={addStep}>Add step</button><button onClick={() => void savePlan(plan.steps, true)}>Approve plan</button><button disabled={plan.status !== "APPROVED"} onClick={() => void start()}>Run Deep Research</button></div></>}
+      <div className="review-actions"><button disabled={plan.steps.length >= 12 || !coverage?.gaps.length} onClick={addStep}>Add step</button><button onClick={() => void savePlan(plan.steps, true)}>Approve plan</button><button disabled={plan.status !== "APPROVED"} onClick={() => void start()}>Investigate this claim</button></div></>}
     {run && <><h4>Research history · {run.status}</h4>{run.rounds.map((round) => <p key={round.number}>Round {round.number}: {round.queries.length} queries · {round.new_case_ids.length} new cases · {round.resolved_gap_ids.length} gaps resolved</p>)}{run.warning && <p className="notice">{run.warning}</p>}{run.coverage && <p>Final coverage: {run.coverage.category}</p>}{["queued", "running"].includes(run.status) && <button onClick={() => void stop()}>Stop research</button>}</>}
-    <h3>Red Team</h3><p>Only verified findings appear on the Matter attack surface. Severity does not predict the outcome.</p><button disabled={!!redTeamJob} onClick={() => void redTeam()}>Red Team this claim</button>{redTeamJob && <p role="status">Red Team running…</p>}
+    <h3>Counterarguments</h3><p>Only verified findings appear on the Matter attack surface. Severity does not predict the outcome.</p><button disabled={!!redTeamJob} onClick={() => void redTeam()}>Find counterarguments</button>{redTeamJob && <p role="status">Red Team running…</p>}
     {attacks.map((attack) => <details key={attack.attack_id}><summary>{attack.severity} · {attack.attack_type.replaceAll("_", " ")}{attack.verified ? "" : " · unverified"}</summary><p>{attack.explanation}</p><p>Cases: {attack.authority_case_ids.join(", ") || "None"} · Passages: {attack.passage_ids.join(", ") || "None"}</p>{attack.matter_spans?.map((span) => <p key={`${span.section_id}-${span.start}`}>Matter document {span.document_id} · characters {span.start}–{span.end}</p>)}<p>Next step: {attack.remediation}</p>{attack.verification_notes.map((note) => <p key={note}>{note}</p>)}</details>)}
   </section>;
 }

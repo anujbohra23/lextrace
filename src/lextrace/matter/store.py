@@ -495,6 +495,7 @@ class MatterStore:
         return LegalClaim.model_validate_json(row[0]) if row else None
 
     def update_claim(self, claim: LegalClaim) -> None:
+        claim.reviewed = False
         with self._lock, self._db:
             previous = self.claim(claim.matter_id, claim.claim_id)
             self._db.execute(
@@ -513,6 +514,21 @@ class MatterStore:
                 ),
             )
             self.invalidate_research(claim.claim_id)
+
+    def set_claim_review(
+        self, matter_id: str, claim_id: str, reviewed: bool, notes: str
+    ) -> LegalClaim:
+        with self._lock, self._db:
+            claim = self.claim(matter_id, claim_id)
+            if claim is None:
+                raise MatterError("Claim was not found.")
+            claim.reviewed = reviewed
+            claim.review_notes = notes
+            self._db.execute(
+                "UPDATE matter_claims SET payload=? WHERE matter_id=? AND id=?",
+                (claim.model_dump_json(), matter_id, claim_id),
+            )
+            return claim
 
     def set_claim_lock(self, matter_id: str, claim_id: str, locked: bool) -> LegalClaim:
         claim = self.claim(matter_id, claim_id)
@@ -538,6 +554,17 @@ class MatterStore:
 
     def update_finding(self, finding: ArgumentFinding) -> None:
         with self._lock, self._db:
+            row = self._db.execute(
+                "SELECT payload FROM matter_claims WHERE id=?", (finding.claim_id,)
+            ).fetchone()
+            if row is not None:
+                reviewed_claim = LegalClaim.model_validate_json(row[0])
+                self.set_claim_review(
+                    reviewed_claim.matter_id,
+                    finding.claim_id,
+                    False,
+                    reviewed_claim.review_notes,
+                )
             self._db.execute(
                 "DELETE FROM matter_evidence WHERE claim_id=?", (finding.claim_id,)
             )

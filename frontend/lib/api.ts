@@ -30,11 +30,20 @@ export type ResearchResult = {
   trace: { status: string; provider: string; model: string; total_seconds: number; usage: { calls: number; input_tokens: number; output_tokens: number } };
 };
 
+export class ApiError extends Error {
+  constructor(public status: number) {
+    super(status === 429 ? "Research is busy. Open an existing run or try again later." : status === 503 ? "This service is unavailable. Check that the model and local index are available, then retry." : status === 422 ? "Check the entered fields and try again." : status === 404 ? "This item could not be found." : "The request could not be completed. Please retry.");
+  }
+}
+export function safeError(error: unknown): string {
+  return error instanceof ApiError ? error.message : "Cannot reach LexTrace. Check your connection and retry. Your saved work is retained.";
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(API_URL + path, {
     ...init,
-    headers: { "content-type": "application/json", ...init?.headers },
+    headers: { ...(init?.body ? { "content-type": "application/json" } : {}), ...init?.headers },
   });
-  if (!response.ok) throw new Error("LexTrace request failed.");
+  if (!response.ok) throw new ApiError(response.status);
   return response.json() as Promise<T>;
 }

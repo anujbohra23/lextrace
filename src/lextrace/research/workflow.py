@@ -50,6 +50,7 @@ from lextrace.retrieval.engine import LexTraceRetriever
 class ResearchConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    max_duration_seconds: float = Field(default=900, gt=0, le=3600)
     max_issues: int = Field(default=4, ge=1, le=10)
     max_queries: int = Field(default=6, ge=1, le=20)
     max_cases_per_query: int = Field(default=8, ge=1, le=20)
@@ -62,6 +63,7 @@ class ResearchConfig(BaseModel):
 
 
 class ResearchGraphState(TypedDict, total=False):
+    started_at: float
     request: ResearchRequest
     run_id: str
     issues: list[LegalIssue]
@@ -168,6 +170,14 @@ class ResearchWorkflow:
     ) -> Callable[[ResearchGraphState], dict[str, object]]:
         def run(state: ResearchGraphState) -> dict[str, object]:
             started = time.perf_counter()
+            if (
+                time.monotonic() - state.get("started_at", time.monotonic())
+                > self.config.max_duration_seconds
+            ):
+                raise ResearchError("Research exceeded its time budget.")
+            self.observer.emit(
+                "node.started", {"run_id": state["run_id"], "node": name}
+            )
             usage_before = self.llm.usage.model_copy()
             try:
                 result = function(state)
@@ -596,6 +606,7 @@ class ResearchWorkflow:
         run_id = run_id or uuid.uuid4().hex
         state = self._graph.invoke(
             {
+                "started_at": time.monotonic(),
                 "request": request,
                 "run_id": run_id,
                 "errors": [],
