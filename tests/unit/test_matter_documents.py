@@ -8,6 +8,7 @@ import pytest
 from pypdf import PdfWriter
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
+from lextrace.investigations.repository import InvestigationRepository
 from lextrace.matter.contracts import MatterError
 from lextrace.matter.documents import extract_document, segment_document
 from lextrace.matter.store import MatterStore
@@ -78,7 +79,7 @@ def test_docx_and_scanned_pdf() -> None:
     assert extracted.page_count == 1
 
 
-def test_extractable_pdf_has_page_and_exact_section_span() -> None:
+def test_extractable_pdf_has_page_and_exact_section_span(tmp_path: Path) -> None:
     writer = PdfWriter()
     page = writer.add_blank_page(width=300, height=300)
     font = DictionaryObject(
@@ -106,6 +107,22 @@ def test_extractable_pdf_has_page_and_exact_section_span() -> None:
     extracted = extract_document("motion.pdf", output.getvalue())
     assert not extracted.ocr_required
     assert extracted.page_count == 1
+    database = tmp_path / "runtime.sqlite3"
+    store = MatterStore(database, tmp_path / "private")
+    matter = store.create_matter("PDF")
+    document = store.add_document(matter.matter_id, "motion.pdf", output.getvalue())
+    repository = InvestigationRepository(database)
+    manifest = repository.list_document_versions(
+        matter.matter_id, document.document_id
+    )[0]
+    assert manifest.page_starts == extracted.page_starts
+    assert manifest.text_length == len(extracted.text)
+    assert manifest.parser == "lextrace.matter.documents/pdf"
+    assert ";pypdf=" in manifest.parser_version
+    assert manifest.coverage == "PARTIAL"
+    assert manifest.extraction_warnings
+    repository.close()
+    store.close()
     sections = segment_document("doc", "hash", extracted)
     assert sections[0].span.page == 1
     assert (

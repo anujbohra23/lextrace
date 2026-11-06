@@ -35,41 +35,54 @@ class InvestigationRepository:
 
     def create_document_version(self, version: DocumentVersion) -> DocumentVersion:
         """Insert once, reuse an equal manifest, or reject a conflicting identity."""
-        version = DocumentVersion.model_validate(version.model_dump(), strict=True)
-        identity = (version.matter_id, version.document_id, version.version_id)
         with self._lock:
             try:
                 self._db.execute("BEGIN IMMEDIATE")
-                owner = self._db.execute(
-                    "SELECT 1 FROM matter_documents d "
-                    "JOIN matters m ON m.id=d.matter_id "
-                    "WHERE d.matter_id=? AND d.id=?",
-                    identity[:2],
-                ).fetchone()
-                if owner is None:
-                    raise MatterError("Document was not found.")
-                row = self._db.execute(
-                    "SELECT payload FROM investigation_document_versions "
-                    "WHERE matter_id=? AND document_id=? AND version_id=?",
-                    identity,
-                ).fetchone()
-                if row is not None:
-                    stored = DocumentVersion.model_validate_json(row[0])
-                    if stored != version:
-                        raise MatterError("Document version identity conflicts.")
-                    result = stored
-                else:
-                    self._db.execute(
-                        "INSERT INTO investigation_document_versions "
-                        "(matter_id,document_id,version_id,payload) VALUES (?,?,?,?)",
-                        (*identity, version.model_dump_json()),
-                    )
-                    result = version
+                result = self.register_in_transaction(self._db, version)
                 self._db.commit()
                 return result
             except Exception:
                 self._db.rollback()
                 raise
+
+    @staticmethod
+    def register_in_transaction(
+        connection: sqlite3.Connection, version: DocumentVersion
+    ) -> DocumentVersion:
+        """Reuse repository rules in a caller-owned transaction; never commit it.
+
+        Caller owns connection locking, schema initialization and rollback.
+        """
+        if not connection.in_transaction:
+            raise RuntimeError("Document registration requires a transaction.")
+        version = DocumentVersion.model_validate(version.model_dump(), strict=True)
+        identity = (version.matter_id, version.document_id, version.version_id)
+        owner = connection.execute(
+            "SELECT 1 FROM matter_documents d "
+            "JOIN matters m ON m.id=d.matter_id "
+            "WHERE d.matter_id=? AND d.id=?",
+            identity[:2],
+        ).fetchone()
+        if owner is None:
+            raise MatterError("Document was not found.")
+        row = connection.execute(
+            "SELECT payload FROM investigation_document_versions "
+            "WHERE matter_id=? AND document_id=? AND version_id=?",
+            identity,
+        ).fetchone()
+        if row is not None:
+            stored = DocumentVersion.model_validate_json(row[0])
+            if stored != version:
+                raise MatterError("Document version identity conflicts.")
+            result = stored
+        else:
+            connection.execute(
+                "INSERT INTO investigation_document_versions "
+                "(matter_id,document_id,version_id,payload) VALUES (?,?,?,?)",
+                (*identity, version.model_dump_json()),
+            )
+            result = version
+        return result
 
     def get_document_version(
         self, matter_id: str, document_id: str, version_id: str

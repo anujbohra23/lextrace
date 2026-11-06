@@ -185,7 +185,7 @@ def test_legacy_migration_preserves_records(
             )
         assert connection.execute(
             "SELECT version FROM investigation_schema_versions"
-        ).fetchall() == [(1,)]
+        ).fetchall() == [(1,), (2,)]
         assert connection.execute(
             "SELECT count(*) FROM investigation_document_versions"
         ).fetchone() == (1,)

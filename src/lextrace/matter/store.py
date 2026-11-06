@@ -10,6 +10,9 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from lextrace.graph.intelligence_contracts import DoctrineAnalysis, TreatmentAnnotation
+from lextrace.investigations.extraction import document_version
+from lextrace.investigations.migrations import migrate
+from lextrace.investigations.repository import InvestigationRepository
 from lextrace.matter.contracts import (
     ArgumentFinding,
     DocumentSection,
@@ -255,6 +258,7 @@ class MatterStore:
         digest = hashlib.sha256(content).hexdigest()
         for existing in self.list_documents(matter_id):
             if existing.content_hash == digest and existing.document_type == kind:
+                self._register_existing_document(existing)
                 return existing
         extracted = extract_document(filename, content)
         document_id = uuid.uuid4().hex
@@ -269,14 +273,20 @@ class MatterStore:
             created_at=_now(),
             text_length=len(extracted.text),
         )
+        version = document_version(document, content, extracted)
         sections = segment_document(document_id, digest, extracted)
         directory = self.private_root / matter_id / document_id
-        directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+        try:
+            with self._lock:
+                migrate(self._db)
+            directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+        except (OSError, sqlite3.Error) as exc:
+            raise MatterError("Document storage initialization failed.") from exc
         try:
             source_file = directory / f"source.{kind}"
             text_file = directory / "extracted.txt"
             source_file.write_bytes(content)
-            text_file.write_text(extracted.text, encoding="utf-8")
+            text_file.write_bytes(extracted.text.encode("utf-8"))
             source_file.chmod(0o600)
             text_file.chmod(0o600)
             with self._lock, self._db:
@@ -284,6 +294,7 @@ class MatterStore:
                     "INSERT INTO matter_documents VALUES (?,?,?)",
                     (document_id, matter_id, document.model_dump_json()),
                 )
+                InvestigationRepository.register_in_transaction(self._db, version)
                 self._db.executemany(
                     "INSERT INTO document_sections VALUES (?,?,?)",
                     [
@@ -291,10 +302,38 @@ class MatterStore:
                         for s in sections
                     ],
                 )
-        except Exception:
+        except Exception as exc:
             shutil.rmtree(directory, ignore_errors=True)
-            raise
+            raise MatterError(
+                "Document storage or investigation registration failed."
+            ) from exc
         return document
+
+    def _register_existing_document(self, document: MatterDocument) -> None:
+        """Legacy deduplication may reuse only a verified saved extraction."""
+        try:
+            with self._lock:
+                migrate(self._db)
+                if self._db.execute(
+                    "SELECT 1 FROM investigation_document_versions "
+                    "WHERE matter_id=? AND document_id=?",
+                    (document.matter_id, document.document_id),
+                ).fetchone():
+                    return
+                directory = (
+                    self.private_root / document.matter_id / document.document_id
+                )
+                content = (directory / f"source.{document.document_type}").read_bytes()
+                extracted = extract_document(document.filename, content)
+                saved = (directory / "extracted.txt").read_bytes()
+                if saved != extracted.text.encode("utf-8"):
+                    raise MatterError("Saved extraction does not match source.")
+                version = document_version(document, content, extracted)
+                with self._db:
+                    self._db.execute("BEGIN IMMEDIATE")
+                    InvestigationRepository.register_in_transaction(self._db, version)
+        except Exception as exc:
+            raise MatterError("Investigation document registration failed.") from exc
 
     def get_document(self, matter_id: str, document_id: str) -> MatterDocument | None:
         with self._lock:
@@ -317,8 +356,10 @@ class MatterStore:
         if self.get_document(matter_id, document_id) is None:
             raise MatterError("Document was not found.")
         return (
-            self.private_root / matter_id / document_id / "extracted.txt"
-        ).read_text(encoding="utf-8")
+            (self.private_root / matter_id / document_id / "extracted.txt")
+            .read_bytes()
+            .decode("utf-8")
+        )
 
     def sections(self, matter_id: str, document_id: str) -> list[DocumentSection]:
         if self.get_document(matter_id, document_id) is None:
