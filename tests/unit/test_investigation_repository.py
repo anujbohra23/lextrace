@@ -185,7 +185,7 @@ def test_legacy_migration_preserves_records(
             )
         assert connection.execute(
             "SELECT version FROM investigation_schema_versions"
-        ).fetchall() == [(1,), (2,)]
+        ).fetchall() == [(1,), (2,), (3,)]
         assert connection.execute(
             "SELECT count(*) FROM investigation_document_versions"
         ).fetchone() == (1,)
@@ -212,3 +212,73 @@ def test_concurrent_initialization_and_duplicate_writes(
         version.matter_id, version.document_id
     ) == [version]
     repository.close()
+
+
+def test_migration_three_preserves_ambiguous_legacy_versions(
+    legacy: tuple[Path, list[MatterDocument]],
+) -> None:
+    from datetime import date
+
+    from lextrace.investigations.review import target_of
+    from tests.unit.test_investigation_chronology import event
+
+    database, documents = legacy
+    repository = InvestigationRepository(database)
+    versions = [manifest(documents[0], identity) for identity in ("version", "aaa")]
+    for version in versions:
+        repository.create_document_version(version)
+    sole = manifest(documents[1], "sole")
+    repository.create_document_version(sole)
+    repository.close()
+    # Reconstruct the populated pre-M4C schema, retaining all manifests and owners.
+    with sqlite3.connect(database) as db:
+        db.execute("DROP TRIGGER investigation_source_deleted")
+        for table in (
+            "investigation_review_revisions",
+            "investigation_review_decisions",
+            "investigation_active_sources",
+            "investigation_retired_sources",
+            "investigation_projection_dependencies",
+        ):
+            db.execute(f"DROP TABLE {table}")
+        db.execute("DELETE FROM investigation_schema_versions WHERE version=3")
+    candidate = event(
+        "legacy",
+        date(2020, 1, 1),
+        matter_id=documents[0].matter_id,
+        document_id=documents[0].document_id,
+    )
+    for _ in range(2):
+        repository = InvestigationRepository(database)
+        assert repository.list_document_versions(
+            candidate.matter_id, candidate.document_id
+        ) == sorted(versions, key=lambda version: version.version_id)
+        with sqlite3.connect(database) as db:
+            assert db.execute(
+                "SELECT * FROM investigation_active_sources"
+            ).fetchall() == [(sole.matter_id, sole.document_id, sole.version_id)]
+        for version in versions:
+            ambiguous = candidate.model_copy(
+                update={
+                    "version_id": version.version_id,
+                    "evidence_references": tuple(
+                        ref.model_copy(update={"version_id": version.version_id})
+                        for ref in candidate.evidence_references
+                    ),
+                    "temporal": candidate.temporal.model_copy(
+                        update={
+                            "version_id": version.version_id,
+                            "evidence_references": tuple(
+                                ref.model_copy(
+                                    update={"version_id": version.version_id}
+                                )
+                                for ref in candidate.temporal.evidence_references
+                            ),
+                        }
+                    ),
+                }
+            )
+            with pytest.raises(MatterError, match="no unambiguous active version"):
+                repository.register_review_candidate(ambiguous)
+            assert repository.review_history(target_of(ambiguous)) == ()
+        repository.close()

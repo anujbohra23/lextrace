@@ -61,6 +61,56 @@ def migrate(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "INSERT INTO investigation_schema_versions(version) VALUES (2)"
             )
+        if (
+            connection.execute(
+                "SELECT 1 FROM investigation_schema_versions WHERE version=3"
+            ).fetchone()
+            is None
+        ):
+            # Audit payloads intentionally outlive document deletion. Current reads
+            # must resolve live ownership and active source versions separately.
+            for statement in (
+                "CREATE TABLE investigation_review_revisions ("
+                "matter_id TEXT NOT NULL, target TEXT NOT NULL, revision INTEGER "
+                "NOT NULL, payload TEXT NOT NULL, "
+                "PRIMARY KEY(matter_id,target,revision))",
+                "CREATE TABLE investigation_review_decisions ("
+                "matter_id TEXT NOT NULL, decision_id TEXT NOT NULL, "
+                "target TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT "
+                "NOT NULL, "
+                "PRIMARY KEY(matter_id,decision_id))",
+                "CREATE TABLE investigation_active_sources ("
+                "matter_id TEXT NOT NULL, document_id TEXT NOT NULL, "
+                "version_id TEXT NOT NULL, PRIMARY KEY(matter_id,document_id))",
+                "CREATE TABLE investigation_retired_sources ("
+                "matter_id TEXT NOT NULL, document_id TEXT NOT NULL, "
+                "version_id TEXT NOT NULL, PRIMARY "
+                "KEY(matter_id,document_id,version_id))",
+                "CREATE TRIGGER investigation_source_deleted BEFORE DELETE "
+                "ON matter_documents BEGIN "
+                "INSERT OR IGNORE INTO investigation_retired_sources "
+                "SELECT matter_id,document_id,version_id FROM "
+                "investigation_document_versions WHERE matter_id=OLD.matter_id "
+                "AND document_id=OLD.id; "
+                "DELETE FROM investigation_active_sources WHERE "
+                "matter_id=OLD.matter_id "
+                "AND document_id=OLD.id; END",
+                "CREATE TABLE investigation_projection_dependencies ("
+                "matter_id TEXT NOT NULL, projection_id TEXT NOT NULL, "
+                "payload TEXT NOT NULL, PRIMARY KEY(matter_id,projection_id))",
+            ):
+                connection.execute(statement)
+            # Only a sole historical version can be identified without guessing
+            # chronological meaning from opaque IDs. Ambiguous sources fail closed.
+            connection.execute(
+                "INSERT INTO investigation_active_sources "
+                "SELECT matter_id,document_id,version_id FROM "
+                "investigation_document_versions GROUP BY matter_id,document_id "
+                "HAVING COUNT(*)=1"
+            )
+            connection.execute(
+                "INSERT INTO investigation_schema_versions(version) VALUES (3)"
+            )
         connection.commit()
     except Exception:
         connection.rollback()

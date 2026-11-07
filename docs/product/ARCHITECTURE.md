@@ -125,3 +125,40 @@ Continue existing polling and shared API helpers; split the existing large Matte
 Use deterministic fake encoders, rerankers, LLMs, clocks and IDs; HTTPX MockTransport for external HTTP tests. Existing unit/API/integration and frontend component suites remain regression gates. Add adversarial provenance, cross-matter isolation, Unicode offsets, temporal ambiguity, checkpoint restart/replay, stale approvals and export validation tests. A synthetic integration fixture tests the entire review flow; independent reviewed examples evaluate semantic usefulness rather than equating quote validation with accuracy.
 
 Safe telemetry contains IDs, counts, hashes, versions, durations, budgets and error codes; exclude private filenames, source text, questions, prompts, credentials and hidden reasoning. Explicit provider configuration is required before private content leaves the host. This design is a local pilot, not a claim of production confidentiality or multi-user readiness.
+
+### M4B/M4C implementation boundary
+
+`investigations/review.py` records strict UTC-attributed decisions and immutable
+review revisions over original events, assertions and entity mentions. ACCEPT,
+REJECT and DEFER use the existing `ReviewState`; EDIT resets acceptance to
+PROPOSED. Every command names the full matter/document/version/run/record identity
+and expected review revision. Date interpretations and explicit mention-to-entity
+links remain separate from original extraction output. Resolving multiple mentions
+to the same reviewer-supplied canonical ID is an explicit identity merge; it never
+merges events or infers that a witness has personal knowledge. Acceptance does not
+change provenance verification, source attribution or factual truth.
+
+Migration 3 adds review revision and decision journals, active/retired source
+identities, and immutable projection dependency manifests. Repository transactions
+use BEGIN IMMEDIATE for compare-and-append across independent connections. Equal
+command replays return the original result, even after later decisions; conflicting
+identity reuse fails. Audit payloads survive source deletion. Live reads require
+current matter/document ownership and an active immutable version. Newly inserted
+versions supersede prior representations; replaying an existing version cannot
+reactivate it. A deletion trigger retires source identities, preventing accidental
+resurrection if a document ID is reused. On migration, only a sole existing version
+is activated automatically; ambiguous historical versions fail closed until a new
+representation is explicitly registered.
+
+`reviewed_chronology.py` projects review revisions using the M4A inclusive overlap
+policy, preserves unknown dates and excluded decisions, and orders on corrected
+interpretations without modifying source temporal records. Persist a
+`ProjectionDependency` containing the exact event revisions to reconstruct it via
+`load_reviewed_chronology`. Currency is derived transactionally from exact input
+revisions and live source identities, rather than mutating historical snapshots or
+caching an accepted flag. Changing an input invalidates only manifests that name
+it. Future M6/M7/M9/M10 services must supply a flattened transitive list of all
+upstream assertion/event/mention revisions, including identity links, and recheck
+currency and provenance at publication. They must request accepted inputs for
+publication; a current reviewable chronology can contain proposed records. No
+workflow, finding, pack, export, or approval-token implementation is included here.

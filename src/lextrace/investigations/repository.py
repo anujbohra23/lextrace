@@ -3,20 +3,28 @@
 import sqlite3
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from lextrace.investigations.contracts import DocumentVersion
 from lextrace.investigations.migrations import migrate
+from lextrace.investigations.review_storage import ReviewStorage, activate_source
 from lextrace.matter.contracts import MatterError
 
+if TYPE_CHECKING:
+    from lextrace.matter.store import MatterStore
 
-class InvestigationRepository:
+
+class InvestigationRepository(ReviewStorage):
     """Owns a separate connection; initialize the database with MatterStore first.
 
     Close this repository independently of MatterStore. No source text or private
     artifacts are written here. Lists use deterministic opaque version-ID order.
     """
 
-    def __init__(self, database: Path) -> None:
+    def __init__(
+        self, database: Path, *, source_store: "MatterStore | None" = None
+    ) -> None:
+        self._source_store = source_store
         self._lock = threading.RLock()
         self._db = sqlite3.connect(
             f"{database.resolve().as_uri()}?mode=rw", uri=True, check_same_thread=False
@@ -81,6 +89,7 @@ class InvestigationRepository:
                 "(matter_id,document_id,version_id,payload) VALUES (?,?,?,?)",
                 (*identity, version.model_dump_json()),
             )
+            activate_source(connection, version)
             result = version
         return result
 
