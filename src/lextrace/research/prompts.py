@@ -5,6 +5,7 @@ from typing import Literal
 from lextrace.retrieval.contracts import Record
 
 PromptId = Literal[
+    "investigation-factual-extraction",
     "issue-spotting",
     "research-planning",
     "precedent-analysis",
