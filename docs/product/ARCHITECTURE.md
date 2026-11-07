@@ -250,3 +250,62 @@ bind review to the exact artifact revision/digest, and add cancellation/recovery
 The in-memory checks cannot make subsequent external writes atomic with this
 service return. No retrieval-quality or inconsistency-accuracy claim is made by
 the synthetic fixtures.
+
+### M7A in-memory orchestration boundary
+
+`investigations/workflow.py` now implements a local Python interface, using the
+installed LangGraph 1.2.20 API. Construct `InvestigationServices` with the existing
+matter store, investigation repository, structured extraction model and M6B
+investigation service (which owns its injected M5B search and independent models).
+Construct `InvestigationWorkflow(services, checkpointer=InMemorySaver())`; the saver
+is required and caller-owned. No provider, model download or persistent saver is
+created by this module.
+
+`start(matter_id, approved_versions, budgets=...)` freezes active source identities
+and returns the server-generated run/thread IDs. `pending_gate(thread_id)` returns
+the current typed state only while a real LangGraph interrupt is pending. Review
+private artifacts through the workflow's run-local `artifacts[thread_id]` map.
+`resume(HumanApproval(...))` requires the exact matter/run/thread/gate, pending
+single-use token, dependency digest and human reviewer ID. Gate 1 accepts explicit
+M4 review commands, including EDIT followed by a separate ACCEPT at the new
+revision. Explicit account-to-mention links are also human supplied; the workflow
+does not infer those links. All scoped evidence must be currently accepted before
+selection. Gate 2 signs the investigation snapshot, while M6 findings retain
+`PROPOSED` and `UNVERIFIED_HYPOTHESIS` semantics. Rejection ends the run; corrections
+after gate 1 require a new run. Incomplete coverage requires explicit human
+acknowledgement at each gate. Empty evidence blocks investigation; an empty
+chronology or zero candidate pairs does not invent evidence or findings.
+
+The explicit graph is validate scope → extract/verify → prepare chronology →
+prepare evidence gate → evidence interrupt → load accepted reviews → select
+candidates → investigate context → prepare findings gate → findings interrupt →
+finalize snapshot. Every node conditionally ends on blocked/canceled states.
+Interrupt nodes contain no preceding writes or expensive work. LangGraph re-enters
+only the interrupted node; completed extraction/investigation checkpoints continue
+without rerunning those services. `GraphInterrupt` is explicitly re-raised through
+the safe exception boundary. Known tuple channel containers are normalized from
+msgpack arrays before strict scalar/domain validation.
+
+Checkpoints contain source identities, coverage IDs/revisions/status, exact review
+dependencies, chronology/candidate/finding references, verification codes, hashes,
+budgets and safe diagnostics. Private text, full model outputs, review explanations
+and full artifacts remain outside checkpoint/resume values. Extraction is capped
+at 100 windows of 20,000 characters, 1,000 records and the global model-call
+allowance; unused extraction call reservations are conservatively retained.
+Candidate selection uses M6A limits, and M6B receives the remaining global model
+and search allowances in addition to its own per-tool limits. Completed graph
+transitions have a hard budget and the graph is acyclic. Source byte hashes and
+review currency are checked at gates, resume and finalization. Cancellation is
+checked between nodes/documents and after bounded service calls; it cannot abort
+an already executing synchronous provider call.
+
+M7A serializes start/resume/cancel within one workflow instance, prevalidates review
+command batches and uses M4's durable idempotent decision journal. The saver,
+private artifact map and consumed-token set must remain alive together. It does
+not implement process restart, cross-instance leases, durable token consumption,
+atomic multi-command review batches, or reconciliation if domain decisions commit
+before checkpoint advancement. Those, SQLite saver compatibility/schema upgrades,
+checkpoint cleanup and durable artifact references remain M7B. Source currency
+checks and in-memory publication are not a shared database transaction; consumers
+must recheck current dependencies before future use. No HTTP endpoint, export,
+pack generation or frontend is added here.
