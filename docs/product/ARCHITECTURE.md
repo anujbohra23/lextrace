@@ -309,3 +309,103 @@ checkpoint cleanup and durable artifact references remain M7B. Source currency
 checks and in-memory publication are not a shared database transaction; consumers
 must recheck current dependencies before future use. No HTTP endpoint, export,
 pack generation or frontend is added here.
+
+### M7B durable local investigation workflow
+
+`InvestigationWorkflow.open(services)` opens the supported `SqliteSaver` from
+`langgraph-checkpoint-sqlite==3.1.3`, verified against installed LangGraph 1.2.20
+and checkpoint core 4.3.1. This saver was not bundled with LangGraph. It accepts a
+caller-owned SQLite connection and supports `delete_thread`; no imitation saver
+or full-run restart replaces graph continuation. Close the workflow before its
+services. Injecting `InMemorySaver` remains available with M7A session semantics.
+
+Default private storage is ignored `artifacts/runtime/`. Checkpoints live under
+`MatterStore.private_root/.investigations-v1/checkpoints.sqlite` (directory 0700,
+files 0600). The wrapper records checkpoint contract version 1 and the tested
+saver version. Unknown versions and existing unversioned checkpoint databases
+require an explicit migration; do not relabel or adopt them automatically. Saver
+3.1.3 owns its checkpoint/writes DDL and its `task_path` upgrade. Changing saver,
+graph channels or artifact schemas requires a reviewed compatibility migration
+and replay tests. M7A memory-only sessions cannot be recovered after loss.
+
+Investigation migration 4 adds run ownership/source associations, private artifact
+revisions, approval intents, approved snapshots and a checkpoint cleanup ledger to
+the existing private matter database. Artifacts use JSON envelope schema 1 with
+matter/run/thread/node ownership and SHA-256 content identities. The hash covers
+both the private artifacts and the node transition; checkpoints retain only the
+hash and existing bounded references/statuses. Each completed graph node has an
+immutable revision; each envelope is limited to 32 MiB, with the graph's existing
+record/window/pair/model budgets retained. Persisted artifacts include verified
+extraction/coverage, chronology, accepted projection, entity links, candidate
+pairs, bounded structured findings and signed snapshot metadata. Full documents,
+prompts, raw provider responses and human review explanations never enter graph
+checkpoints. Review explanations and commands remain in the private intent/M4
+journal. Failed deserialization exposes fixed errors without private payloads.
+
+`reopen(original_thread_id)` reloads and validates artifact identities, original
+and extracted source bytes, active versions and exact review dependencies. It
+continues interrupted graph execution or reconciles a previously authorized
+approval; it never supplies a new human decision. Completed node results are
+journaled before checkpoint advancement, so a crash in that gap replays only the
+recorded transition. Extraction and investigation first persist an execution
+marker. If the process dies before recording their result, recovery fails closed
+and requires a new investigation: external model calls cannot be made exactly
+once by a local database transaction. Completed recorded tools are never rerun.
+Missing/corrupt artifacts, replaced/deleted sources and stale reviews fail closed.
+
+A private approval intent is scoped to matter/run/thread/gate/token/digest and
+contains the human reviewer and explicit M4 decision IDs/payloads. Its monotonic
+states are PREPARED → APPLIED → DONE. PREPARED is committed before domain writes;
+all review revisions, M4 decision journal rows and the APPLIED transition then
+commit together under the repository's `BEGIN IMMEDIATE`. Optimistic revisions,
+idempotent decision IDs and source currency checks remain enforced. A crash
+between decisions rolls back the complete batch. After APPLIED, recovery restores
+entity links/reviewer identity from the private intent and advances the original
+interrupt without reapplying decisions. After graph continuation, DONE records
+the typed outcome. Identical retries return that saved outcome; conflicting
+payloads, wrong scopes/tokens/digests and stale inputs fail closed. Models have no
+access to this human command interface. This is a trusted local pilot interface,
+not reviewer authentication.
+
+One nonblocking OS advisory file lock serializes start/resume/reopen/cancel and
+publication across workflow instances/processes sharing the private root. Busy
+callers retry; a process exit releases the lock without a timeout that could
+expire during a live tool call. SQLite still independently serializes review and
+source metadata writers. This intentionally coarse single-host coordination
+trades throughput for straightforward crash fencing; it is not a remote lease.
+
+Cancellation commits to the run journal before the checkpoint update and is
+checked before recovery, approval and publication. Source deletion transactionally
+cascades the run's private artifacts/intents/snapshots and queues metadata-only
+checkpoint deletion. `recover_cleanup()` and opening a durable workflow drain
+that idempotent ledger with the supported saver, while MatterStore's existing
+private-file cleanup ledger handles source files. M4 historical review audit
+retention remains unchanged. No deleted source is restored from workflow data.
+
+Publication has its own `BEGIN IMMEDIATE` on the same repository connection as
+source versions and review revisions. Inside that transaction it revalidates live
+run/cancellation state, both committed human approval intents and signer, exact
+active source identities, original/extracted byte hashes, accepted current review
+revisions, and original/nested temporal/retrieved finding evidence against trusted
+text and sections. It then inserts one immutable snapshot per thread with a
+stable snapshot ID and explicit source/review/artifact dependency digests.
+Conflicting snapshot identities are rejected; retries reuse the same row.
+Snapshots mean `HUMAN_SIGNED_INVESTIGATION_HYPOTHESES`; findings remain proposed
+and interpretations remain unverified hypotheses.
+
+The LangGraph saver uses a separate database/connection. Snapshot/domain commits
+and graph advancement are **not** one transaction; the intent/artifact journals
+reconcile the gap without repeating committed decisions or tools. Publication
+excludes application source deletion/replacement and review writes through
+SQLite's writer lock, without acquiring MatterStore locks inside that transaction.
+Source files are immutable through the application; arbitrary out-of-band file
+mutation is not made atomic by SQLite. Hash checks detect damage on recovery/use,
+but this is not a filesystem/distributed transaction or forensic erasure scheme.
+
+`inspect` reports historical checkpoint stage. Consumers must obtain a current
+snapshot through `approved_snapshot(thread_id)`, which rechecks source bytes and
+accepted dependencies transactionally and refuses stale/canceled/deleted runs.
+Approval is not cached as perpetual currency: a later dependency change makes an
+existing approved snapshot stale. The returned object describes that transaction's
+snapshot; any subsequent publication/use needs its own current dependency check.
+No API, UI, export, pack generation or additional agent is introduced.

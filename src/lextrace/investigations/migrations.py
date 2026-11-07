@@ -111,6 +111,45 @@ def migrate(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "INSERT INTO investigation_schema_versions(version) VALUES (3)"
             )
+        if (
+            connection.execute(
+                "SELECT 1 FROM investigation_schema_versions WHERE version=4"
+            ).fetchone()
+            is None
+        ):
+            for statement in (
+                "CREATE TABLE investigation_runs (thread_id TEXT PRIMARY KEY, "
+                "matter_id TEXT NOT NULL REFERENCES matters(id) ON DELETE CASCADE, "
+                "run_id TEXT NOT NULL UNIQUE, status TEXT NOT NULL DEFAULT 'LIVE')",
+                "CREATE TABLE investigation_run_sources (thread_id TEXT NOT NULL "
+                "REFERENCES investigation_runs(thread_id) ON DELETE CASCADE, "
+                "document_id TEXT NOT NULL, PRIMARY KEY(thread_id,document_id))",
+                "CREATE TABLE investigation_artifacts (thread_id TEXT NOT NULL "
+                "REFERENCES investigation_runs(thread_id) ON DELETE CASCADE, "
+                "node TEXT NOT NULL, digest TEXT NOT NULL, payload BLOB NOT NULL, "
+                "result TEXT, PRIMARY KEY(thread_id,node))",
+                "CREATE TABLE investigation_intents (thread_id TEXT NOT NULL "
+                "REFERENCES investigation_runs(thread_id) ON DELETE CASCADE, "
+                "gate TEXT NOT NULL, token TEXT NOT NULL UNIQUE, payload TEXT "
+                "NOT NULL, "
+                "status TEXT NOT NULL, outcome TEXT, PRIMARY KEY(thread_id,gate))",
+                "CREATE TABLE investigation_snapshots (thread_id TEXT PRIMARY KEY "
+                "REFERENCES investigation_runs(thread_id) ON DELETE CASCADE, "
+                "snapshot_id TEXT NOT NULL UNIQUE, payload TEXT NOT NULL)",
+                "CREATE TABLE investigation_checkpoint_cleanup (thread_id TEXT "
+                "PRIMARY KEY)",
+                "CREATE TRIGGER investigation_run_deleted BEFORE DELETE ON "
+                "investigation_runs BEGIN INSERT OR IGNORE INTO "
+                "investigation_checkpoint_cleanup VALUES (OLD.thread_id); END",
+                "CREATE TRIGGER investigation_run_source_deleted BEFORE DELETE ON "
+                "matter_documents BEGIN DELETE FROM investigation_runs WHERE "
+                "matter_id=OLD.matter_id AND thread_id IN (SELECT thread_id FROM "
+                "investigation_run_sources WHERE document_id=OLD.id); END",
+            ):
+                connection.execute(statement)
+            connection.execute(
+                "INSERT INTO investigation_schema_versions(version) VALUES (4)"
+            )
         connection.commit()
     except Exception:
         connection.rollback()

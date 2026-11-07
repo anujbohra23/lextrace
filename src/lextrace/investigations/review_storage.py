@@ -173,47 +173,54 @@ class ReviewStorage:
             try:
                 # Serializes read/check/append across separate repository instances.
                 self._db.execute("BEGIN IMMEDIATE")
-                if not self._source_current(command.target):
-                    raise MatterError("Source is missing or stale.")
-                prior = self._db.execute(
-                    "SELECT payload,revision,target FROM "
-                    "investigation_review_decisions "
-                    "WHERE matter_id=? AND decision_id=?",
-                    (command.target.matter_id, command.decision_id),
-                ).fetchone()
-                if prior:
-                    if ReviewDecision.model_validate_json(prior[0]) != command:
-                        raise MatterError("Decision identity conflicts.")
-                    row = self._db.execute(
-                        "SELECT payload FROM investigation_review_revisions "
-                        "WHERE matter_id=? AND target=? AND revision=?",
-                        (command.target.matter_id, prior[2], prior[1]),
-                    ).fetchone()
-                    result = ReviewRevision.model_validate_json(row[0])
-                else:
-                    current = self._latest(command.target)
-                    if current is None:
-                        raise MatterError("Review target was not found.")
-                    try:
-                        result = apply_review(current, command)
-                    except ValueError as exc:
-                        raise MatterError(str(exc)) from exc
-                    self._append(result)
-                    self._db.execute(
-                        "INSERT INTO investigation_review_decisions VALUES (?,?,?,?,?)",
-                        (
-                            command.target.matter_id,
-                            command.decision_id,
-                            command.target.model_dump_json(),
-                            result.revision,
-                            command.model_dump_json(),
-                        ),
-                    )
+                result = self.review_in_transaction(command)
                 self._db.commit()
                 return result
             except Exception:
                 self._db.rollback()
                 raise
+
+    def review_in_transaction(self, command: ReviewDecision) -> ReviewRevision:
+        """Apply one command in a caller-owned batch; never commit or rollback."""
+        if not self._db.in_transaction:
+            raise RuntimeError("Review requires a transaction.")
+        if not self._source_current(command.target):
+            raise MatterError("Source is missing or stale.")
+        prior = self._db.execute(
+            "SELECT payload,revision,target FROM "
+            "investigation_review_decisions "
+            "WHERE matter_id=? AND decision_id=?",
+            (command.target.matter_id, command.decision_id),
+        ).fetchone()
+        if prior:
+            if ReviewDecision.model_validate_json(prior[0]) != command:
+                raise MatterError("Decision identity conflicts.")
+            row = self._db.execute(
+                "SELECT payload FROM investigation_review_revisions "
+                "WHERE matter_id=? AND target=? AND revision=?",
+                (command.target.matter_id, prior[2], prior[1]),
+            ).fetchone()
+            result = ReviewRevision.model_validate_json(row[0])
+        else:
+            current = self._latest(command.target)
+            if current is None:
+                raise MatterError("Review target was not found.")
+            try:
+                result = apply_review(current, command)
+            except ValueError as exc:
+                raise MatterError(str(exc)) from exc
+            self._append(result)
+            self._db.execute(
+                "INSERT INTO investigation_review_decisions VALUES (?,?,?,?,?)",
+                (
+                    command.target.matter_id,
+                    command.decision_id,
+                    command.target.model_dump_json(),
+                    result.revision,
+                    command.model_dump_json(),
+                ),
+            )
+        return result
 
     def review_history(self, target: ReviewTarget) -> tuple[ReviewRevision, ...]:
         """Matter-scoped audit read, including obsolete or deleted source versions."""

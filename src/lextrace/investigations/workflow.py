@@ -1,8 +1,6 @@
-"""M7A local orchestration. Checkpoints contain references, never private artifacts.
+"""Local LangGraph orchestration with optional private SQLite recovery.
 
-Only the local human interface accepts review commands. Models have no access to
-it. The injected saver and private artifact map must live for the whole session;
-process recovery, cross-process leases and atomic resume intents belong to M7B.
+Use open() for durable execution; injected MemorySaver remains session-only.
 """
 
 from collections.abc import Callable
@@ -27,6 +25,7 @@ from lextrace.investigations.contracts import (
     InvestigationEvent,
     SourceIdentity,
 )
+from lextrace.investigations.durable import DurableRuntime
 from lextrace.investigations.evidence_search import ApprovedVersion
 from lextrace.investigations.extraction_verification import (
     ExtractionVerificationResult,
@@ -87,6 +86,7 @@ class InvestigationState(ReviewContract):
     thread_id: Identity
     sources: Annotated[tuple[SourceIdentity, ...], Field(max_length=100)]
     budgets: WorkflowBudgets
+    artifact_digest: SHA256 | None = None
     extraction_ids: tuple[Identity, ...] = ()
     extraction_revisions: tuple[Count, ...] = ()
     evidence_approval_digest: SHA256 | None = None
@@ -164,6 +164,10 @@ class HumanApproval(ReviewContract):
 
 
 class ApprovedInvestigationSnapshot(ReviewContract):
+    snapshot_id: SHA256
+    source_dependency_digest: SHA256
+    review_dependency_digest: SHA256
+    artifact_digest: SHA256 | None
     matter_id: Identity
     run_id: Identity
     thread_id: Identity
@@ -321,10 +325,10 @@ def _digest(state: InvestigationState) -> str:
 
 
 class InvestigationWorkflow:
-    """Single-process local start/inspect/resume interface; saver is mandatory.
+    """Local human interface; open() enables durable recovery and coordination.
 
-    The lock serializes local resumes. No arbitrary graph state is accepted from
-    callers and human tokens are consumed once. This is not an authentication API.
+    No arbitrary graph state is accepted from callers. This trusted local pilot
+    interface is not an authentication API.
     """
 
     def __init__(
@@ -332,7 +336,8 @@ class InvestigationWorkflow:
     ) -> None:
         self.services = services
         self.artifacts: dict[str, InvestigationArtifacts] = {}
-        self._lock = RLock()
+        self.runtime: DurableRuntime | None = None
+        self._lock: RLock | DurableRuntime = RLock()
         self._used: set[str] = set()
         builder = StateGraph(InvestigationState)
         nodes = [
@@ -349,7 +354,7 @@ class InvestigationWorkflow:
             ("finalize_snapshot", self._finalize),
         ]
         for name, function in nodes:
-            builder.add_node(name, cast(Any, self._bounded(function)))
+            builder.add_node(name, cast(Any, self._bounded(function, name)))
         builder.add_edge(START, nodes[0][0])
         for index, (name, _) in enumerate(nodes):
             next_node = nodes[index + 1][0] if index + 1 < len(nodes) else END
@@ -362,15 +367,221 @@ class InvestigationWorkflow:
             )
         self._graph = builder.compile(checkpointer=checkpointer)
 
+    @classmethod
+    def open(cls, services: InvestigationServices) -> "InvestigationWorkflow":
+        """Open supported SQLite checkpoints under MatterStore.private_root.
+
+        Reuse the same matter database/private root after restart. The caller owns
+        services and must close this workflow before closing those services.
+        """
+        runtime = DurableRuntime(services)
+        try:
+            workflow = cls(services, checkpointer=runtime.saver)
+            workflow.runtime = runtime
+            workflow._lock = runtime
+            with runtime:
+                runtime.cleanup()
+            return workflow
+        except BaseException:
+            runtime.close()
+            raise
+
+    def close(self) -> None:
+        if self.runtime is not None:
+            self.runtime.close()
+
+    def _reload(self, state: InvestigationState) -> InvestigationState:
+        runtime = self.runtime
+        assert runtime is not None
+        runtime.require_live(state)
+        if state.artifact_digest is not None:
+            rows = runtime.read(
+                "SELECT node FROM investigation_artifacts WHERE thread_id=? "
+                "AND digest=?",
+                (state.thread_id, state.artifact_digest),
+            )
+            row = rows[0] if rows else None
+            if row is None:
+                raise ValueError("Private artifact revision unavailable.")
+            referenced, _ = runtime.load(state.thread_id, row[0])
+            self._validate_private(state, referenced)
+        artifacts, _ = runtime.load(state.thread_id)
+        # The private intent is authoritative for commands committed before the
+        # graph advanced. Do not put these commands into checkpoint channels.
+        rows = runtime.read(
+            "SELECT payload,status FROM investigation_intents WHERE thread_id=? "
+            "ORDER BY rowid",
+            (state.thread_id,),
+        )
+        dependencies = {d.target: d for d in state.dependencies}
+        for payload, status in rows:
+            intent = runtime.parse_approval(payload)
+            if (
+                status not in ("PREPARED", "APPLIED", "DONE")
+                or intent.matter_id != state.matter_id
+                or intent.run_id != state.run_id
+                or intent.thread_id != state.thread_id
+            ):
+                raise ValueError("Private approval intent invalid.")
+            if status in ("APPLIED", "DONE"):
+                self._used.add(intent.token)
+                artifacts.reviewer_id = intent.reviewer_id
+                if intent.gate == "evidence":
+                    artifacts.entity_links = intent.entity_links
+                for decision in intent.evidence_decisions:
+                    dependencies[decision.target] = RecordDependency(
+                        target=decision.target,
+                        revision=decision.expected_revision + 1,
+                    )
+        checked = state.model_copy(
+            update={"dependencies": tuple(dependencies.values())}
+        )
+        with runtime.transaction():
+            runtime.currency(
+                checked,
+                accepted=state.review_gate == "findings" or state.stage == "APPROVED",
+            )
+        self.artifacts[state.thread_id] = artifacts
+        return checked
+
+    @staticmethod
+    def _validate_private(
+        state: InvestigationState, artifacts: InvestigationArtifacts
+    ) -> None:
+        invalid = (
+            state.extraction_ids
+            != tuple(r.coverage.original.coverage_id for r in artifacts.verified)
+            or state.extraction_revisions
+            != tuple(r.coverage.original.revision for r in artifacts.verified)
+            or state.coverage != tuple(r.coverage.status for r in artifacts.verified)
+            or state.candidate_ids != tuple(p.pair_id for p in artifacts.pairs)
+        )
+        if artifacts.result is not None:
+            invalid |= (
+                state.finding_ids
+                != tuple(f.finding_id for f in artifacts.result.findings)
+                or state.verification
+                != tuple(f.verification for f in artifacts.result.findings)
+                or set(artifacts.result.sources) != set(state.sources)
+                or not set(artifacts.result.dependencies).issubset(state.dependencies)
+            )
+        elif state.review_gate == "findings" or state.stage == "APPROVED":
+            invalid = True
+        if state.entity_links_digest is not None:
+            invalid |= (
+                state.entity_links_digest
+                != sha256(
+                    "".join(
+                        link.model_dump_json() for link in artifacts.entity_links
+                    ).encode()
+                ).hexdigest()
+            )
+        if invalid:
+            raise ValueError("Private artifact revision conflicts with checkpoint.")
+
+    def recover_cleanup(self) -> int:
+        """Drain idempotent checkpoint cleanup queued by source/matter deletion."""
+        if self.runtime is None:
+            return 0
+        with self._lock:
+            threads = self.runtime.cleanup()
+            for thread in threads:
+                self.artifacts.pop(thread, None)
+            return len(threads)
+
+    def reopen(self, thread_id: str) -> InvestigationState:
+        """Validate private recovery state and continue already-authorized work.
+
+        A tool call interrupted before its result was durably recorded fails
+        closed; recovery never guesses whether an external call completed.
+        """
+        if self.runtime is None:
+            return self.inspect(thread_id)
+        with self._lock:
+            state = self.inspect(thread_id)
+            if state.cancelled:
+                return state
+            self._reload(state)
+            rows = self.runtime.read(
+                "SELECT payload FROM investigation_intents WHERE thread_id=? "
+                "AND status!='DONE' ORDER BY rowid LIMIT 1",
+                (thread_id,),
+            )
+            row = rows[0] if rows else None
+            if row:
+                return self._resume_durable(self.runtime.parse_approval(row[0]))
+            if self._graph.get_state(
+                self._config(thread_id)
+            ).next and not self.pending_gate(thread_id):
+                self._graph.invoke(None, self._config(thread_id))
+            return self.inspect(thread_id)
+
+    def _resume_durable(self, approval: HumanApproval) -> InvestigationState:
+        runtime = self.runtime
+        assert runtime is not None
+        state = self.inspect(approval.thread_id)
+        if state.cancelled:
+            raise ValueError("Investigation canceled.")
+        self._reload(state)
+        prior = runtime.intent(approval)
+        if prior and prior[0] == "DONE":
+            assert prior[1] is not None
+            return InvestigationState.model_validate_json(prior[1])
+        if prior:
+            if prior[0] == "PREPARED":
+                runtime.apply_intent(state, approval)
+            self._used.add(approval.token)
+            self.artifacts[state.thread_id].reviewer_id = approval.reviewer_id
+            if approval.gate == "evidence":
+                self.artifacts[state.thread_id].entity_links = approval.entity_links
+            # A committed graph may already be at gate 2 or END. Resume only
+            # the original interrupt, otherwise continue the remaining nodes.
+            if state.pending_review_token == approval.token:
+                self._graph.invoke(
+                    Command(resume=approval.decision), self._config(state.thread_id)
+                )
+            elif self._graph.get_state(
+                self._config(state.thread_id)
+            ).next and not self.pending_gate(state.thread_id):
+                self._graph.invoke(None, self._config(state.thread_id))
+            runtime.crash("after_graph_continuation")
+            result = self.inspect(state.thread_id)
+            runtime.complete(approval, result)
+            return result
+        # New intent: use the existing M7A validation path before any writes.
+        return self._resume(approval)
+
     @staticmethod
     def _config(thread_id: str) -> RunnableConfig:
         return {"configurable": {"thread_id": thread_id}, "recursion_limit": 32}
 
     def inspect(self, thread_id: str) -> InvestigationState:
-        values = self._graph.get_state(self._config(thread_id)).values
-        if not values:
-            raise ValueError("Unknown investigation thread.")
-        return InvestigationState.model_validate(values)
+        try:
+            values = self._graph.get_state(self._config(thread_id)).values
+            if not values:
+                raise ValueError
+            state = InvestigationState.model_validate(values)
+        except Exception:
+            raise ValueError("Unknown or invalid investigation checkpoint.") from None
+        if self.runtime is not None:
+            rows = self.runtime.read(
+                "SELECT status FROM investigation_runs WHERE thread_id=? AND "
+                "matter_id=? AND run_id=?",
+                (thread_id, state.matter_id, state.run_id),
+            )
+            row = rows[0] if rows else None
+            if row is None:
+                self.artifacts.pop(thread_id, None)
+                raise ValueError("Investigation deleted or unavailable.")
+            if row[0] == "CANCELED":
+                return state.model_copy(
+                    update={
+                        "cancelled": True,
+                        "stage": "CANCELED",
+                        "pending_review_token": None,
+                    }
+                )
+        return state
 
     def pending_gate(self, thread_id: str) -> InvestigationState | None:
         state = self.inspect(thread_id)
@@ -419,12 +630,29 @@ class InvestigationWorkflow:
                 budgets=b,
             )
             self.artifacts[thread] = InvestigationArtifacts()
+            if self.runtime is not None:
+                self.runtime.create(state, self.artifacts[thread])
             self._graph.invoke(state, self._config(thread))
             return self.inspect(thread)
 
     def resume(self, approval: HumanApproval) -> InvestigationState:
-        approval = HumanApproval.model_validate(approval.model_dump(), strict=True)
-        with self._lock:
+        try:
+            approval = HumanApproval.model_validate(approval.model_dump(), strict=True)
+        except Exception:
+            raise ValueError("Invalid human approval.") from None
+        if self.runtime is not None:
+            with self._lock:
+                return self._resume_durable(approval)
+        return self._resume(approval)
+
+    def _resume(self, approval: HumanApproval) -> InvestigationState:
+        try:
+            approval = HumanApproval.model_validate(approval.model_dump(), strict=True)
+        except Exception:
+            raise ValueError("Invalid human approval.") from None
+        from contextlib import nullcontext
+
+        with self._lock if self.runtime is None else nullcontext():
             state = self.pending_gate(approval.thread_id)
             if state is None or any(
                 (
@@ -481,8 +709,12 @@ class InvestigationWorkflow:
             # M4 handles optimistic revisions and idempotent decision IDs. Keep the
             # private commands outside checkpoint resume values (explanations may
             # contain private text). Crash reconciliation is deliberately M7B.
-            for decision in approval.evidence_decisions:
-                self.services.repository.review(decision)
+            if self.runtime is not None:
+                self.runtime.prepare_intent(state, approval)
+                self.runtime.apply_intent(state, approval)
+            else:
+                for decision in approval.evidence_decisions:
+                    self.services.repository.review(decision)
             if approval.gate == "evidence":
                 self.artifacts[state.thread_id].entity_links = approval.entity_links
             self._used.add(approval.token)
@@ -490,13 +722,46 @@ class InvestigationWorkflow:
             self._graph.invoke(
                 Command(resume=approval.decision), self._config(state.thread_id)
             )
-            return self.inspect(state.thread_id)
+            result = self.inspect(state.thread_id)
+            if self.runtime is not None:
+                self.runtime.crash("after_graph_continuation")
+                self.runtime.complete(approval, result)
+            return result
+
+    def approved_snapshot(self, thread_id: str) -> ApprovedInvestigationSnapshot:
+        """Read a current signed hypothesis snapshot; stale history is not current."""
+        with self._lock:
+            state = self.inspect(thread_id)
+            if state.stage != "APPROVED":
+                raise ValueError("Investigation is not approved.")
+            if self.runtime is None:
+                if not self.services.currency(state, accepted=True):
+                    raise ValueError("Stale investigation inputs.")
+            else:
+                self._reload(state)
+                with self.runtime.transaction() as db:
+                    self.runtime.currency(state, accepted=True)
+                    row = db.execute(
+                        "SELECT payload FROM investigation_snapshots WHERE thread_id=?",
+                        (thread_id,),
+                    ).fetchone()
+                    if row is None:
+                        raise ValueError("Approved snapshot unavailable.")
+                    return ApprovedInvestigationSnapshot.model_validate_json(row[0])
+            snapshot = self.artifacts[thread_id].snapshot
+            if snapshot is None:
+                raise ValueError("Approved snapshot unavailable.")
+            return snapshot
 
     def cancel(self, thread_id: str) -> InvestigationState:
         with self._lock:
             state = self.inspect(thread_id)
             if state.stage == "APPROVED":
                 raise ValueError("Investigation already approved.")
+            if state.cancelled:
+                return state
+            if self.runtime is not None:
+                self.runtime.cancel(state)
             self._graph.update_state(
                 self._config(thread_id),
                 {"cancelled": True, "stage": "CANCELED", "pending_review_token": None},
@@ -504,9 +769,20 @@ class InvestigationWorkflow:
             return self.inspect(thread_id)
 
     def _bounded(
-        self, function: Callable[[InvestigationState], dict[str, object]]
+        self, function: Callable[[InvestigationState], dict[str, object]], name: str
     ) -> Callable[[InvestigationState], dict[str, object]]:
         def run(state: InvestigationState) -> dict[str, object]:
+            if self.runtime is not None:
+                self.runtime.require_live(state)
+                if self.runtime.cached(state, name):
+                    artifacts, cached = self.runtime.load(state.thread_id, name)
+                    self.artifacts[state.thread_id] = artifacts
+                    assert cached is not None
+                    return cached
+                if name in ("extract_verify", "investigate_context"):
+                    self.runtime.begin_node(
+                        state, name, self.artifacts[state.thread_id]
+                    )
             if state.cancelled or self.services.stopped():
                 return {"stage": "CANCELED", "cancelled": True}
             if state.transitions_used >= state.budgets.transitions:
@@ -524,6 +800,10 @@ class InvestigationWorkflow:
                 result = {"stage": "CANCELED", "cancelled": True}
                 self.artifacts[state.thread_id].snapshot = None
             result["transitions_used"] = state.transitions_used + 1
+            if self.runtime is not None:
+                self.runtime.finish_node(
+                    state, name, self.artifacts[state.thread_id], result
+                )
             return result
 
         return run
@@ -731,6 +1011,16 @@ class InvestigationWorkflow:
         assert state.chronology_id and state.approval_digest and artifacts.reviewer_id
         assert state.evidence_approval_digest and state.entity_links_digest
         artifacts.snapshot = ApprovedInvestigationSnapshot(
+            snapshot_id=sha256(
+                (state.run_id + state.approval_digest).encode()
+            ).hexdigest(),
+            source_dependency_digest=sha256(
+                "".join(s.model_dump_json() for s in state.sources).encode()
+            ).hexdigest(),
+            review_dependency_digest=sha256(
+                "".join(d.model_dump_json() for d in state.dependencies).encode()
+            ).hexdigest(),
+            artifact_digest=state.artifact_digest,
             matter_id=state.matter_id,
             run_id=state.run_id,
             thread_id=state.thread_id,
@@ -743,4 +1033,6 @@ class InvestigationWorkflow:
             entity_links_digest=state.entity_links_digest,
             reviewer_id=artifacts.reviewer_id,
         )
+        if self.runtime is not None:
+            self.runtime.publish(state, artifacts)
         return {"stage": "APPROVED", "review_gate": None}
