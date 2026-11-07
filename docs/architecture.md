@@ -278,14 +278,53 @@ jobs and legacy issues, facts, claims or citations block deletion conservatively
 these records can anchor evidence and opaque downstream payload references.
 Ownership checks on analysis, fact and job writes serialize against deletion.
 
-Database deletion commits before private directory removal. SQL failure leaves
-files intact; filesystem failure reports that metadata is deleted and manual
-private-file cleanup is required, without exposing paths. A process crash after
-commit can also leave orphan private files. SQLite and the filesystem are not one
-atomic resource; no durable cleanup journal or automatic retry is introduced.
-An absent document returns 404, so retrying DELETE does not clean orphan files.
+M2C-1's manual orphan cleanup policy is superseded by M2C-2 below.
 
-M2C-2 must define deletion/invalidation for referenced evidence and operations,
-including future investigation evidence/operation tables (currently absent), and
-any durable recovery policy for orphan artifacts. Full matter deletion is outside
-this change; its existing behavior is unchanged.
+### M2C-2: durable private deletion recovery
+
+Both deletion methods use `BEGIN IMMEDIATE` to serialize ownership and active-job
+checks with writes. They atomically insert an ID-only `private_cleanup_v1` intent
+and delete metadata, preserving section/version and whole-matter cascades. This
+additive, idempotent table initialization does not rewrite legacy records. The
+ledger deliberately has no cascading foreign key: intent must survive its owner.
+Document deletion still blocks legacy analysis/evidence references conservatively;
+whole-matter deletion cascades owned records, leaving unrelated matters and global
+research/monitoring records intact. No opaque payload references are rewritten.
+Uploads hold the SQLite write transaction across owner recheck, file creation and
+registration, so a concurrent whole-matter delete cannot recreate private paths.
+Existing analysis, fact, job and version writes retain transactional owner checks.
+
+Only after metadata commits does cleanup remove the server-selected matter or
+document directory. Intent is acknowledged in a second transaction after successful
+removal (or verified absence). A crash anywhere between these commits is safe to
+retry. Filesystem/acknowledgement failure raises a path-free MatterError (400),
+never a successful 204. Retrying DELETE with matching pending intent retries
+cleanup; after completed cleanup, repeated DELETE retains 404 behavior. Wrong
+matter/document combinations cannot claim another owner's intent.
+
+After restart, an operator can open the same `MatterStore(database, private_root)`
+and call `recover_pending_cleanup(limit=100)`, returning `(completed, failed)`.
+The limit must be 1–1000 and bounds the number of intents, not bytes or elapsed time.
+Attempts are deterministic and idempotent; failed intents stay durable and do not
+stop the remaining selected attempts. There is no automatic startup deletion or
+worker. Persistent failures at the front of the ordered queue may require a larger
+limit or filesystem repair to reach later entries. Recovery never scans arbitrary
+orphan directories or erases pre-ledger files without a recorded deletion intent.
+
+Cleanup validates IDs, checks the configured root's device/inode, opens root and
+matter ancestors with `O_NOFOLLOW`, and uses descriptor-relative, symlink-resistant
+`shutil.rmtree`. Replaced ancestor symlinks fail closed; nested links are unlinked
+without traversing their targets. Unsupported platforms fail cleanup rather than
+fall back to unsafe traversal. The private root, its parent configuration, SQLite
+DB and process credentials remain trusted local administration boundaries. This
+is not protection against a privileged actor moving real directories between
+owners or rewriting the DB; no secure-erasure or backup-erasure guarantee is made.
+An upload crashing before publication can still leave an unregistered directory;
+this ledger covers deletion of registered resources, not upload staging recovery.
+
+M7 checkpoints and M10 exports do not exist yet. Those milestones must register
+ownership and active operations transactionally before publication, keep local
+artifacts in the verified owner subtree, and extend this durable intent protocol
+for any separately stored checkpoint database or export artifact. They must define
+invalidation/cascades for new evidence and operation tables and prove restart-safe
+cleanup before using them. No hypothetical storage backend is introduced here.
