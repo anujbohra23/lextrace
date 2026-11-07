@@ -6,6 +6,8 @@ from lextrace.retrieval.contracts import Record
 
 PromptId = Literal[
     "investigation-factual-extraction",
+    "bounded-inconsistency-v1",
+    "independent-inconsistency-verification-v1",
     "issue-spotting",
     "research-planning",
     "precedent-analysis",

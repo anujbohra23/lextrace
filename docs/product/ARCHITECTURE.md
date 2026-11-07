@@ -186,3 +186,67 @@ an incompatible expected identity fails closed. Injected local model implementat
 must match server-owned settings and must not retain inputs; the service does not
 instantiate models, download weights or authorize external providers. There is no
 API, workflow node or persistent vector cache in this milestone.
+
+### M6B bounded investigation boundary
+
+`inconsistency_investigation.py` is a synchronous Python service with injected
+`StructuredLLM` reasoner, independent verifier and M5B-compatible search. It creates
+no persisted finding, workflow, approval token or export. `findings.py` separates
+exact source-attributed quotes, unverified hypotheses/alternatives, semantic
+premise assessments, exact provenance, current upstream human acceptance and the
+finding's own PROPOSED review state. Status is POTENTIAL_INCONSISTENCY,
+INSUFFICIENT_EVIDENCE or NO_ESTABLISHED_CONFLICT. Model output uses closed
+vocabularies rather than factual prose or accusations.
+
+The trusted entry boundary is application-owned MatterStore and
+InvestigationRepository instances over the same private storage. M6A's supplied
+verification results, dependency lists and VALID flags are not independent proof.
+Each pair is revalidated structurally, compared with exact current stored review
+revisions (including resolved mentions), and its immutable original is rechecked
+through M3 `verify_extraction` against active manifests and current source
+text/sections. The stored record supplies run/record identity; this does not claim
+that the original extraction model run or normalized semantics were authenticated.
+M3 verification establishes provenance and its supported temporal interpretation,
+not semantic truth. The independent structured call assesses every account premise
+and comparison dimension against allowlisted exact evidence; it receives no
+first-pass proposal. A separate injected provider/model can be used, but two calls
+do not guarantee statistically independent judgments or semantic correctness.
+
+Only explicitly approved active versions are searched, using M5B's offline BM25
+mode. Retrieved references are independently checked through the existing
+provenance validator against trusted ownership, manifests, sections, text and
+code-point offsets. Nested temporal references are retained. Models return hashed
+reference IDs only; no new locators or quotes can enter the evidence registry.
+All ten dimensions and seven competing explanations must be assessed, with
+citations for non-unknown assessments. Unknown/unsupported premises or disagreement
+between the independent assessments make the finding insufficient. A potential
+finding additionally requires explicit asserted accounts, known attribution,
+matching subject/predicate/object, opposite polarity, distinct account evidence,
+exact same-day interpretations, comparable context, opposing account support and
+no unresolved competing explanation. These conservative checks deliberately
+exclude many possible investigative leads; missing contrary evidence and interval
+ambiguity never establish conflict. Semantic judgments remain model assessments,
+not proofs from quote offsets. Alternative explanations remain unverified
+hypotheses even when a model labels their evidentiary support.
+
+Limits cap input pairs (before deduplication), approved sources, per-pair mentions,
+source characters, serialized input characters, searches per pair and run,
+retrieved passages, structured output sizes, model calls and alternatives. The
+service reserves two model calls before search, performs no repair/retry loop,
+and publishes safe code/count diagnostics for failures and partial coverage.
+Provider-internal retry/token/time limits must also be configured by the caller;
+the service counts StructuredLLM invocations, not provider HTTP attempts.
+Stable pair IDs are preserved, duplicate pairs are collapsed and finding IDs hash
+the pair, policy and both structured assessments. Model nondeterminism is not
+hidden by this identity policy.
+
+Source/review currency is rechecked after retrieval, between model calls, after
+verification and across all findings at the return boundary. Changed dependencies
+fail closed; final-boundary changes discard the result's findings. Results retain
+all approved immutable source identities and flattened upstream record revisions
+for M7/M9 invalidation. No durable approval is implied: M7 must revalidate source
+provenance and every dependency inside its own publication/persistence boundary,
+bind review to the exact artifact revision/digest, and add cancellation/recovery.
+The in-memory checks cannot make subsequent external writes atomic with this
+service return. No retrieval-quality or inconsistency-accuracy claim is made by
+the synthetic fixtures.
