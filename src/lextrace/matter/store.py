@@ -247,6 +247,76 @@ class MatterStore:
             ).rowcount
         return bool(removed)
 
+    def delete_document(self, matter_id: str, document_id: str) -> bool:
+        """Delete an unreferenced document, committing metadata before file cleanup.
+
+        A cleanup failure leaves private orphan files, never live document metadata
+        pointing at partially removed files. Such failures require manual cleanup.
+        """
+        _id(matter_id)
+        _id(document_id)
+        with self._lock:
+            try:
+                with self._db:
+                    self._db.execute("BEGIN IMMEDIATE")
+                    if self.get_document(matter_id, document_id) is None:
+                        return False
+                    active = self._db.execute(
+                        "SELECT 1 FROM matter_jobs WHERE matter_id=? AND document_id=? "
+                        "AND status IN ('queued','running') LIMIT 1",
+                        (matter_id, document_id),
+                    ).fetchone()
+                    if active:
+                        raise MatterError(
+                            "Wait for document analysis to finish before deletion."
+                        )
+                    # Legacy analysis has payload references without document FKs.
+                    # Refuse it rather than trying to cascade opaque evidence.
+                    for table in (
+                        "matter_issues",
+                        "matter_facts",
+                        "matter_claims",
+                        "document_citations",
+                    ):
+                        if self._db.execute(
+                            f"SELECT 1 FROM {table} "
+                            "WHERE matter_id=? AND document_id=? LIMIT 1",
+                            (matter_id, document_id),
+                        ).fetchone():
+                            raise MatterError(
+                                "Document has analysis or evidence references; "
+                                "deletion is unavailable."
+                            )
+                    self._db.execute(
+                        "DELETE FROM matter_jobs WHERE matter_id=? AND document_id=?",
+                        (matter_id, document_id),
+                    )
+                    # Keep the composite ownership cascade for investigation versions
+                    # and the document-scoped section cascade intact.
+                    self._db.execute(
+                        "DELETE FROM matter_documents WHERE matter_id=? AND id=?",
+                        (matter_id, document_id),
+                    )
+            except sqlite3.Error as exc:
+                raise MatterError("Document metadata deletion failed.") from exc
+            directory = self.private_root / matter_id / document_id
+            try:
+                shutil.rmtree(directory)
+            except FileNotFoundError:
+                # Only an absent root is already clean; a missing child can signal
+                # an interrupted or concurrently modified cleanup.
+                if directory.exists() or directory.is_symlink():
+                    raise MatterError(
+                        "Document metadata was deleted, but private file cleanup "
+                        "failed; manual cleanup is required."
+                    ) from None
+            except OSError as exc:
+                raise MatterError(
+                    "Document metadata was deleted, but private file cleanup "
+                    "failed; manual cleanup is required."
+                ) from exc
+        return True
+
     def add_document(
         self, matter_id: str, filename: str, content: bytes
     ) -> MatterDocument:
@@ -378,6 +448,9 @@ class MatterStore:
             raise MatterError("Document was not found.")
         document.analysis_warnings = analysis.warnings
         with self._lock, self._db:
+            self._db.execute("BEGIN IMMEDIATE")
+            if self.get_document(analysis.matter_id, analysis.document_id) is None:
+                raise MatterError("Document was not found.")
             self._db.execute(
                 "UPDATE matter_documents SET payload=? WHERE id=?",
                 (document.model_dump_json(), document.document_id),
@@ -505,7 +578,10 @@ class MatterStore:
 
     def save_facts(self, facts: list[MatterFact]) -> None:
         with self._lock, self._db:
+            self._db.execute("BEGIN IMMEDIATE")
             for fact in facts:
+                if self.get_document(fact.matter_id, fact.document_id) is None:
+                    raise MatterError("Document was not found.")
                 self._db.execute(
                     "INSERT OR REPLACE INTO matter_facts VALUES (?,?,?,?)",
                     (
@@ -809,10 +885,11 @@ class MatterStore:
     def create_job(
         self, matter_id: str, document_id: str, claim_id: str | None = None
     ) -> str:
-        if self.get_document(matter_id, document_id) is None:
-            raise MatterError("Document was not found.")
         job_id = uuid.uuid4().hex
         with self._lock, self._db:
+            self._db.execute("BEGIN IMMEDIATE")
+            if self.get_document(matter_id, document_id) is None:
+                raise MatterError("Document was not found.")
             self._db.execute(
                 "INSERT INTO matter_jobs VALUES (?,?,?,?,?,?,?,?)",
                 (

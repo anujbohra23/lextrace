@@ -267,3 +267,25 @@ become alerts. Lawyer review controls application to one claim and targeted
 derived-cache invalidation. No-change is a valid result. See
 [monitoring documentation](v2-living-matters.md) for versioning, review rules,
 CPU Docker configuration, and limits.
+
+### M2C-1: scoped document deletion
+
+`DELETE /matters/{matter_id}/documents/{document_id}` returns 204 on complete
+cleanup and uses the existing MatterError 404/400 responses. Ownership is checked
+inside a SQLite write transaction. Investigation versions and sections use their
+existing foreign-key cascades. Terminal document jobs are removed. Queued/running
+jobs and legacy issues, facts, claims or citations block deletion conservatively:
+these records can anchor evidence and opaque downstream payload references.
+Ownership checks on analysis, fact and job writes serialize against deletion.
+
+Database deletion commits before private directory removal. SQL failure leaves
+files intact; filesystem failure reports that metadata is deleted and manual
+private-file cleanup is required, without exposing paths. A process crash after
+commit can also leave orphan private files. SQLite and the filesystem are not one
+atomic resource; no durable cleanup journal or automatic retry is introduced.
+An absent document returns 404, so retrying DELETE does not clean orphan files.
+
+M2C-2 must define deletion/invalidation for referenced evidence and operations,
+including future investigation evidence/operation tables (currently absent), and
+any durable recovery policy for orphan artifacts. Full matter deletion is outside
+this change; its existing behavior is unchanged.

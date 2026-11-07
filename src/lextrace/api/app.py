@@ -456,6 +456,11 @@ def create_app(
             for d in get_matter_store().list_documents(matter_id)
         ]
 
+    @application.delete("/matters/{matter_id}/documents/{document_id}", status_code=204)
+    def delete_document(matter_id: str, document_id: str) -> None:
+        if not get_matter_store().delete_document(matter_id, document_id):
+            raise MatterError("Document was not found.")
+
     @application.get("/matters/{matter_id}/documents/{document_id}")
     def read_document(matter_id: str, document_id: str) -> dict[str, object]:
         store = get_matter_store()
