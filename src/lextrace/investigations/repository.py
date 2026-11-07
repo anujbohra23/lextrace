@@ -93,6 +93,25 @@ class InvestigationRepository(ReviewStorage):
             result = version
         return result
 
+    def active_document_version(
+        self, matter_id: str, document_id: str
+    ) -> DocumentVersion | None:
+        """Resolve only a live, owned, non-retired source manifest."""
+        with self._lock:
+            row = self._db.execute(
+                "SELECT v.payload FROM investigation_active_sources a "
+                "JOIN investigation_document_versions v ON v.matter_id=a.matter_id "
+                "AND v.document_id=a.document_id AND v.version_id=a.version_id "
+                "JOIN matter_documents d ON d.matter_id=a.matter_id "
+                "AND d.id=a.document_id JOIN matters m ON m.id=d.matter_id "
+                "WHERE a.matter_id=? AND a.document_id=? AND NOT EXISTS "
+                "(SELECT 1 FROM investigation_retired_sources r "
+                "WHERE r.matter_id=a.matter_id AND r.document_id=a.document_id "
+                "AND r.version_id=a.version_id)",
+                (matter_id, document_id),
+            ).fetchone()
+        return DocumentVersion.model_validate_json(row[0]) if row else None
+
     def get_document_version(
         self, matter_id: str, document_id: str, version_id: str
     ) -> DocumentVersion | None:

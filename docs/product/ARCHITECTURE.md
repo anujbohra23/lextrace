@@ -162,3 +162,27 @@ upstream assertion/event/mention revisions, including identity links, and rechec
 currency and provenance at publication. They must request accepted inputs for
 publication; a current reviewable chronology can contain proposed records. No
 workflow, finding, pack, export, or approval-token implementation is included here.
+
+### M5B private evidence search boundary
+
+`investigations/evidence_search.py` exposes a synchronous `EvidenceSearchService`
+with strict request/result contracts. Approved document/version pairs restrict the
+search scope; they do not establish review acceptance or factual truth. The service
+resolves active, non-retired manifests and trusted READY document text/sections,
+checks provenance, and applies document/type/section filters before constructing
+BM25 statistics or encoding passages. Exact section-bounded code-point chunks use
+shared BM25Core, injected Encoder, numeric passage ordinals for shared dense/RRF
+interfaces, optional PairScorer, and deterministic overlap suppression. Returned
+references are checked again after model calls against live storage.
+
+Private indexes are ephemeral, rebuilt from the eligible corpus on every call and
+never serialized or cached. No index artifact survives source deletion/replacement;
+there is no public index, graph, log or Git write. This trades repeated encoding and
+BM25 construction for zero retained private index lifecycle state. Source/passages
+and candidate/result counts are bounded. The returned SHA-256 identity covers
+matter, manifests, exact passage content/bounds, filters, tokenizer/preprocessing,
+chunk/overlap, BM25, model revisions/window/pooling and reranker settings. Supplying
+an incompatible expected identity fails closed. Injected local model implementations
+must match server-owned settings and must not retain inputs; the service does not
+instantiate models, download weights or authorize external providers. There is no
+API, workflow node or persistent vector cache in this milestone.
