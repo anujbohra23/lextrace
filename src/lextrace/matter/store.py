@@ -177,6 +177,59 @@ class MatterStore:
                 """
             )
 
+    def bind_operator(self, operator_id: str, *, adopt_legacy: bool = False) -> None:
+        """Bind this whole single-operator workspace; never transfer ownership.
+
+        Legacy adoption is an explicit server-admin operation. The transaction
+        serializes first binding across application instances and processes.
+        """
+        with self._lock:
+            try:
+                self._db.execute("BEGIN IMMEDIATE")
+                self._db.execute(
+                    "CREATE TABLE IF NOT EXISTS pilot_operator_v1 "
+                    "(singleton INTEGER PRIMARY KEY CHECK(singleton=1), "
+                    "operator_id TEXT NOT NULL)"
+                )
+                row = self._db.execute(
+                    "SELECT operator_id FROM pilot_operator_v1 WHERE singleton=1"
+                ).fetchone()
+                if row is not None:
+                    if row[0] != operator_id:
+                        raise MatterError("OPERATOR_OWNERSHIP_MISMATCH")
+                else:
+                    if (
+                        not adopt_legacy
+                        and self._db.execute("SELECT 1 FROM matters LIMIT 1").fetchone()
+                    ):
+                        raise MatterError("LEGACY_OWNERSHIP_ADOPTION_REQUIRED")
+                    self._db.execute(
+                        "INSERT INTO pilot_operator_v1 VALUES (1,?)", (operator_id,)
+                    )
+                self._db.commit()
+            except BaseException:
+                self._db.rollback()
+                raise
+
+    def require_investigation_matter(self, matter_id: str, thread_id: str) -> None:
+        """Check trusted durable association before any future API thread access."""
+        with self._lock:
+            if (
+                self._db.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' "
+                    "AND name='investigation_runs'"
+                ).fetchone()
+                is None
+            ):
+                raise MatterError("Investigation was not found.")
+            row = self._db.execute(
+                "SELECT 1 FROM investigation_runs r JOIN matters m "
+                "ON m.id=r.matter_id WHERE r.thread_id=? AND r.matter_id=?",
+                (thread_id, matter_id),
+            ).fetchone()
+            if row is None:
+                raise MatterError("Investigation was not found.")
+
     def close(self) -> None:
         with self._lock:
             self._db.close()

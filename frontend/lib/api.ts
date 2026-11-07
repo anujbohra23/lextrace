@@ -1,5 +1,24 @@
 export const API_URL = process.env.NEXT_PUBLIC_LEXTRACE_API_URL ?? "http://localhost:8000";
 
+// Provision per browser tab for the local pilot; never bundle an API secret.
+export function operatorHeaders(): Record<string, string> {
+  const token = typeof window === "undefined" ? null : window.sessionStorage.getItem("lextrace.operatorToken");
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export async function downloadMatrix(matterId: string): Promise<void> {
+  const response = await fetch(`${API_URL}/matters/${matterId}/evidence-matrix.csv`, {
+    headers: operatorHeaders(), cache: "no-store",
+  });
+  if (!response.ok) throw new Error("LexTrace request failed.");
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "evidence-matrix.csv";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
 export type Evidence = {
   result: {
     case_id: string;
@@ -33,7 +52,8 @@ export type ResearchResult = {
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(API_URL + path, {
     ...init,
-    headers: { "content-type": "application/json", ...init?.headers },
+    headers: { "content-type": "application/json", ...init?.headers, ...operatorHeaders() },
+    cache: "no-store",
   });
   if (!response.ok) throw new Error("LexTrace request failed.");
   return response.json() as Promise<T>;

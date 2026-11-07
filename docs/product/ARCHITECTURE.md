@@ -409,3 +409,11 @@ Approval is not cached as perpetual currency: a later dependency change makes an
 existing approved snapshot stale. The returned object describes that transaction's
 snapshot; any subsequent publication/use needs its own current dependency check.
 No API, UI, export, pack generation or additional agent is introduced.
+
+## Single-operator API boundary
+
+The [single-operator prerequisite](SINGLE_OPERATOR_AUTH.md) protects all API routes
+except health/static docs, binds the pilot workspace to one persisted operator,
+and supplies server-derived reviewer identity. M7 human command identity alone
+remains insufficient authentication; HTTP callers must pass this boundary and
+the trusted thread/matter guard before M8 exposes durable workflow operations.

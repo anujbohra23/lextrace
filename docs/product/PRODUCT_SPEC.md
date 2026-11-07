@@ -6,7 +6,7 @@ Status: proposed design, based on repository inspection on 2026-11-05. This docu
 
 Help a lawyer turn a bounded collection of matter documents into a reviewed, source-linked witness deposition preparation pack. The product organizes evidence and proposes investigative questions; it does not determine credibility, establish that an allegation is true, or infer legal treatment from citations.
 
-Primary user: a lawyer preparing to depose a named witness. V1 targets a private, single-host workspace for one trusted operator. Shared deployments, authentication, tenant authorization, and production data governance require a separately scoped release; matter scoping alone is not user authorization.
+Primary user: a lawyer preparing to depose a named witness. V1 targets a private, single-host workspace for one trusted operator. The API now uses [single-operator authentication](SINGLE_OPERATOR_AUTH.md). Shared deployments, multi-user authentication, tenant authorization, and production data governance require a separately scoped release; matter scoping alone is not user authorization.
 
 ## Flagship workflow
 

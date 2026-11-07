@@ -2,6 +2,9 @@ services:
   backend:
     build: .
     environment:
+      LEXTRACE_OPERATOR_ID: ${LEXTRACE_OPERATOR_ID:-}
+      LEXTRACE_OPERATOR_API_SECRET: ${LEXTRACE_OPERATOR_API_SECRET:-}
+      LEXTRACE_ADOPT_LEGACY_MATTERS: ${LEXTRACE_ADOPT_LEGACY_MATTERS:-false}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_BASE_URL: ${OPENAI_BASE_URL:-}
       LEXTRACE_LLM_PROVIDER: ${LEXTRACE_LLM_PROVIDER:-openai-compatible}
@@ -22,7 +25,7 @@ services:
       - lextrace-models:/home/lextrace/.cache
     extra_hosts:
       - host.docker.internal:host-gateway
-    ports: ["8000:8000"]
+    ports: ["127.0.0.1:8000:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
       interval: 10s
@@ -36,7 +39,7 @@ services:
     depends_on:
       backend:
         condition: service_healthy
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
 volumes:
   lextrace-runtime:
   lextrace-models:

@@ -23,8 +23,11 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import Field
+from starlette.concurrency import run_in_threadpool
 
+from lextrace.api.auth import authenticate_operator
 from lextrace.config import (
     APP_TITLE,
     AppSettings,
@@ -375,7 +378,7 @@ def create_app(
         CORSMiddleware,
         allow_origins=configured.cors_origins,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
-        allow_headers=["content-type", "x-request-id"],
+        allow_headers=["content-type", "x-request-id", "authorization"],
     )
 
     @application.exception_handler(MatterError)
@@ -399,6 +402,53 @@ def create_app(
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex
         response = await call_next(request)
         response.headers["x-request-id"] = request_id
+        return response
+
+    @application.middleware("http")
+    async def operator_boundary(
+        request: Request, call_next: Callable[[Request], Awaitable[Response]]
+    ) -> Response:
+        # Closed allowlist also protects routes added in future milestones.
+        if request.url.path in {
+            "/health",
+            "/docs",
+            "/docs/oauth2-redirect",
+            "/redoc",
+            "/openapi.json",
+        }:
+            return await call_next(request)
+        # Preflight contains no credentials or application data. CORSMiddleware
+        # validates the requested origin/method/headers without invoking a route.
+        if (
+            request.method == "OPTIONS"
+            and "origin" in request.headers
+            and "access-control-request-method" in request.headers
+        ):
+            return await call_next(request)
+        try:
+            principal = authenticate_operator(request, configured)
+            await run_in_threadpool(
+                lambda: get_matter_store().bind_operator(
+                    principal.operator_id, adopt_legacy=configured.adopt_legacy_matters
+                )
+            )
+        except HTTPException as error:
+            return JSONResponse(
+                status_code=error.status_code,
+                content={"detail": error.detail},
+                headers=error.headers,
+            )
+        except MatterError:
+            return JSONResponse(
+                status_code=403, content={"detail": "OPERATOR_ACCESS_DENIED"}
+            )
+        except Exception:
+            return JSONResponse(
+                status_code=503, content={"detail": "OPERATOR_STORAGE_UNAVAILABLE"}
+            )
+        request.state.operator = principal
+        response = await call_next(request)
+        response.headers["Cache-Control"] = "no-store"
         return response
 
     @application.get("/health")

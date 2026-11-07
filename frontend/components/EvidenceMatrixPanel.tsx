@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { API_URL } from "@/lib/api";
+import { downloadMatrix } from "@/lib/api";
 import { MatrixRow } from "@/lib/deepResearch";
 import { MatterAlert, MonitoringTarget } from "@/lib/monitoring";
 
@@ -26,6 +26,7 @@ export function EvidenceMatrixPanel({
   matterId: string; rows: MatrixRow[]; openClaim: (claimId: string) => void;
   alerts?: MatterAlert[]; targets?: MonitoringTarget[];
 }) {
+  const [exportError, setExportError] = useState(false);
   const [filters, setFilters] = useState<Filters>(EMPTY);
   const [sort, setSort] = useState("vulnerability");
   const [showChange, setShowChange] = useState(false);
@@ -70,7 +71,8 @@ export function EvidenceMatrixPanel({
       <label><input type="checkbox" checked={filters.unresolved} onChange={(event) => setFilters({ ...filters, unresolved: event.target.checked })} /> Unresolved gaps only</label>
       <label>Sort<select value={sort} onChange={(event) => setSort(event.target.value)}><option value="vulnerability">Vulnerability</option><option value="coverage">Coverage</option><option value="issue">Issue</option><option value="authority">Authority</option><option value="importance">Importance</option></select></label>
       <label><input type="checkbox" checked={showChange} onChange={(event) => setShowChange(event.target.checked)} /> Show change columns</label>
-      <a href={`${API_URL}/matters/${matterId}/evidence-matrix.csv`}>Export CSV</a>
+      <button onClick={() => { setExportError(false); void downloadMatrix(matterId).catch(() => setExportError(true)); }}>Export CSV</button>
+      {exportError && <p role="alert">CSV export failed.</p>}
     </div>
     <div className="matrix-scroll"><table className="evidence-matrix"><thead><tr><th>Issue</th><th>Claim</th><th>Source</th><th>Matter evidence</th><th>Cited authority</th><th>Citation support</th><th>Authority status</th><th>Strongest support</th><th>Strongest counter</th><th>Later treatment</th><th>Doctrine state</th><th>Coverage</th><th>Red Team</th><th>Argument status</th><th>Gaps</th>{showChange && <><th>Last checked</th><th>New authority</th><th>Change impact</th><th>Alert status</th></>}</tr></thead><tbody>
       {visible.map((row) => { const latest = alerts.find((alert) => alert.claim_id === row.claim_id); const target = targets.find((item) => item.target_type === "CLAIM" && item.target_reference_id === row.claim_id); return <tr key={row.claim_id}><td>{row.issue}</td><td><button className="link-button" onClick={() => openClaim(row.claim_id)}>{row.claim}</button></td><td>{row.document_name} · {row.source_start}–{row.source_end}</td><td>{row.matter_evidence_ids?.length ? `${row.matter_evidence_ids.length} linked facts` : "None recorded"}</td><td>{row.cited_case_ids.join(", ") || "None"}</td><td>{row.citation_support}</td><td>{row.authority_category}</td><td>{row.strongest_support_case_id ?? "None"}</td><td>{row.strongest_counter_case_id ?? "None"}</td><td>{row.later_treatment?.join(", ") || "Not reviewed"}</td><td>{row.doctrine_state}</td><td>{row.coverage}</td><td>{row.attack_severity ?? "None verified"}</td><td>{row.argument_status}</td><td>{row.gaps.join(", ") || "None recorded"}</td>{showChange && <><td>{target?.last_checked_at?.slice(0, 10) ?? "Not checked"}</td><td>{latest?.new_case_id ?? "None"}</td><td>{latest?.title ?? "No material change"}</td><td>{latest?.review_state ?? "None"}</td></>}</tr>; })}

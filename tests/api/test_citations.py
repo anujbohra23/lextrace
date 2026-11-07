@@ -83,6 +83,9 @@ def test_citation_endpoint_and_mode(
         graph=CitationGraph(graph_path),
     )
     with TestClient(create_app(engine)) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         response = client.get(f"/cases/{cases[0].source_id}/citations")
         assert response.status_code == 200
         assert response.json()[0]["node"]["case_id"] == cases[1].source_id

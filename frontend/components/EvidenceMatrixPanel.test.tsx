@@ -28,5 +28,5 @@ it("filters coverage and opens a claim without conflating attack severity", () =
   expect(screen.queryByText("Protected activity is required.")).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole("button", { name: "Another claim." }));
   expect(open).toHaveBeenCalledWith("claim-2");
-  expect(screen.getByRole("link", { name: "Export CSV" })).toHaveAttribute("href", expect.stringContaining("evidence-matrix.csv"));
+  expect(screen.getByRole("button", { name: "Export CSV" })).toBeInTheDocument();
 });

@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from lextrace.api.app import create_app
 from lextrace.config import AppSettings
@@ -28,11 +29,19 @@ def test_monitoring_api_and_background_no_change(
     store, matter_id, claim_id = matter_store(tmp_path)
     store.close()
     settings = AppSettings(
+        operator_id="test-operator",
+        adopt_legacy_matters=True,
+        operator_api_secret=SecretStr(
+            "test-only-credential-00000000000000000000000000"
+        ),
         matter_db=tmp_path / "matter.sqlite3",
         private_matter_root=tmp_path / "private",
     )
     engine = LexTraceRetriever(corpus)
     with TestClient(create_app(retriever=engine, settings=settings)) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         overview = client.get(f"/matters/{matter_id}/monitoring")
         assert overview.status_code == 200
         assert len(overview.json()["targets"]) == 1

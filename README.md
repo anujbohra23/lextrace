@@ -504,3 +504,7 @@ before an earlier quota stop. It validates engineering behavior, not retrieval
 improvement. Citation expansion is an engineering candidate-generation mechanism,
 not GraphRAG or the future LexTrace research contribution. Treatment labels,
 authority weighting, graph ranking, and complete acquisition remain deferred.
+
+API access requires the server-configured operator bearer credential. See the
+[single-operator setup and legacy adoption policy](docs/product/SINGLE_OPERATOR_AUTH.md)
+before starting the API or browser workspace.

@@ -1,4 +1,4 @@
-import { API_URL } from "./api";
+import { API_URL, operatorHeaders } from "./api";
 
 export type Span = {
   document_id: string; section_id: string; start: number; end: number; page: number | null;
@@ -40,7 +40,7 @@ export async function uploadDocument(matterId: string, file: File): Promise<Docu
   const body = new FormData();
   body.append("file", file);
   const response = await fetch(`${API_URL}/matters/${matterId}/documents`, {
-    method: "POST", body,
+    method: "POST", body, headers: operatorHeaders(),
   });
   if (!response.ok) throw new Error("Document upload failed.");
   return response.json() as Promise<Document>;

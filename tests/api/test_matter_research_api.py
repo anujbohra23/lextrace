@@ -6,7 +6,7 @@ from typing import TypeVar
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, SecretStr
 
 from lextrace.api.app import create_app
 from lextrace.config import AppSettings
@@ -74,6 +74,11 @@ class FakeSearch:
 
 def test_matter_research_review_and_export(tmp_path: Path) -> None:
     settings = AppSettings(
+        operator_id="test-operator",
+        adopt_legacy_matters=True,
+        operator_api_secret=SecretStr(
+            "test-only-credential-00000000000000000000000000"
+        ),
         matter_db=tmp_path / "matter.sqlite3",
         private_matter_root=tmp_path / "private",
     )
@@ -118,6 +123,9 @@ def test_matter_research_review_and_export(tmp_path: Path) -> None:
     store.close()
     search = FakeSearch()
     with TestClient(create_app(retriever=search, settings=settings)) as client:  # type: ignore[arg-type]
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         base = f"/matters/{matter.matter_id}/claims/{claim.claim_id}"
         coverage = client.get(f"{base}/research-coverage")
         assert coverage.status_code == 200
@@ -211,6 +219,11 @@ def test_issue_rerun_is_bounded_to_selected_issue(
 
     monkeypatch.setattr("lextrace.api.app.configured_llm", OfflineLLM)
     settings = AppSettings(
+        operator_id="test-operator",
+        adopt_legacy_matters=True,
+        operator_api_secret=SecretStr(
+            "test-only-credential-00000000000000000000000000"
+        ),
         matter_db=tmp_path / "matter.sqlite3",
         private_matter_root=tmp_path / "private",
         llm_model="offline-test",
@@ -260,6 +273,9 @@ def test_issue_rerun_is_bounded_to_selected_issue(
     )
     store.close()
     with TestClient(create_app(retriever=FakeSearch(), settings=settings)) as client:  # type: ignore[arg-type]
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         accepted = client.post(
             f"/matters/{matter.matter_id}/issues/{issue.issue_id}/reanalyze"
         )

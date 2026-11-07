@@ -17,6 +17,9 @@ Sample = tuple[list[Case], BenchmarkInputs, BenchmarkConfig]
 def test_search_and_case(benchmark_sample: Sample) -> None:
     cases, _, _ = benchmark_sample
     with TestClient(create_app(LexTraceRetriever(Corpus(cases[:4])))) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         response = client.post(
             "/search",
             json={
@@ -55,11 +58,17 @@ def test_search_and_case(benchmark_sample: Sample) -> None:
 )
 def test_invalid_request(payload: dict[str, object]) -> None:
     with TestClient(create_app(index_path=Path("missing-index"))) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         assert client.post("/search", json=payload).status_code == 422
 
 
 def test_missing_index_health_independent() -> None:
     with TestClient(create_app(index_path=Path("missing-index"))) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         assert client.get("/health").status_code == 200
         assert (
             client.post("/search", json={"query": "x", "mode": "bm25"}).status_code
@@ -81,6 +90,9 @@ def test_lazy_index_is_loaded_once(
 
     monkeypatch.setattr(LexTraceRetriever, "from_index", load)
     with TestClient(create_app(index_path=Path("index"))) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         assert client.get("/health").status_code == 200
         assert calls == 0
         for _ in range(2):

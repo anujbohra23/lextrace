@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from lextrace.api.app import create_app
 from lextrace.config import AppSettings
@@ -31,8 +32,19 @@ def test_research_lifecycle_trace_runs_and_request_id(
 ) -> None:
     store = RunStore(tmp_path / "runtime.sqlite3")
     jobs = ResearchJobs(StubWorkflow(empty_research_response), store)
-    settings = AppSettings(cors_origins=["http://frontend.test"])
+    settings = AppSettings(
+        matter_db=tmp_path / "matter.sqlite3",
+        private_matter_root=tmp_path / "private",
+        operator_id="test-operator",
+        operator_api_secret=SecretStr(
+            "test-only-credential-00000000000000000000000000"
+        ),
+        cors_origins=["http://frontend.test"],
+    )
     with TestClient(create_app(research_jobs=jobs, settings=settings)) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         response = client.post(
             "/research",
             json={"question": "What authority should be researched?"},
@@ -61,6 +73,9 @@ def test_research_validation(
     store = RunStore(tmp_path / "runtime.sqlite3")
     jobs = ResearchJobs(StubWorkflow(empty_research_response), store)
     with TestClient(create_app(research_jobs=jobs)) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         assert client.post("/research", json={"question": ""}).status_code == 422
     jobs.close()
     store.close()

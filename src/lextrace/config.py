@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 from typing import Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 
 APP_TITLE = "LexTrace"
 COURTLISTENER_API_BASE_URL = "https://www.courtlistener.com/api/rest/v4/"
@@ -19,6 +19,10 @@ class AppSettings(BaseModel):
     """Production runtime settings loaded from one environment boundary."""
 
     model_config = ConfigDict(extra="forbid")
+
+    operator_id: str | None = Field(default=None, repr=False)
+    operator_api_secret: SecretStr | None = Field(default=None, repr=False)
+    adopt_legacy_matters: bool = False
 
     index_path: Path = Path("artifacts/indexes/default")
     graph_path: Path | None = None
@@ -41,6 +45,16 @@ class AppSettings(BaseModel):
         origins = os.environ.get("LEXTRACE_CORS_ORIGINS", "http://localhost:3000")
         try:
             return cls(
+                operator_id=os.environ.get("LEXTRACE_OPERATOR_ID"),
+                operator_api_secret=(
+                    SecretStr(os.environ["LEXTRACE_OPERATOR_API_SECRET"])
+                    if "LEXTRACE_OPERATOR_API_SECRET" in os.environ
+                    else None
+                ),
+                adopt_legacy_matters=os.environ.get(
+                    "LEXTRACE_ADOPT_LEGACY_MATTERS", "false"
+                ).lower()
+                == "true",
                 index_path=Path(
                     os.environ.get("LEXTRACE_INDEX_PATH", "artifacts/indexes/default")
                 ),

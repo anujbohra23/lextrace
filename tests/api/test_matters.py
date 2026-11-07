@@ -7,7 +7,7 @@ from typing import TypeVar
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, HttpUrl, SecretStr
 
 from lextrace.api.app import create_app
 from lextrace.config import AppSettings
@@ -84,6 +84,11 @@ class StubLLM:
 
 def _settings(tmp_path: Path, *, model: str | None = None) -> AppSettings:
     return AppSettings(
+        operator_id="test-operator",
+        adopt_legacy_matters=True,
+        operator_api_secret=SecretStr(
+            "test-only-credential-00000000000000000000000000"
+        ),
         matter_db=tmp_path / "matters.sqlite3",
         private_matter_root=tmp_path / "private",
         llm_model=model,
@@ -92,6 +97,9 @@ def _settings(tmp_path: Path, *, model: str | None = None) -> AppSettings:
 
 def test_matter_lifecycle_and_private_upload(tmp_path: Path) -> None:
     with TestClient(create_app(settings=_settings(tmp_path))) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         matter = client.post("/matters", json={"name": "Smith v. Example"})
         assert matter.status_code == 201
         matter_id = matter.json()["matter_id"]
@@ -170,6 +178,9 @@ def test_background_xray_and_manual_edit(
     with TestClient(
         create_app(retriever=engine, settings=_settings(tmp_path, model="test"))
     ) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         matter_id = client.post("/matters", json={"name": "Test"}).json()["matter_id"]
         document_id = client.post(
             f"/matters/{matter_id}/documents",
