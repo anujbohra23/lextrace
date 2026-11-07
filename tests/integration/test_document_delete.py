@@ -123,14 +123,18 @@ def test_api_and_cleanup_failure(
         url = f"/matters/{matter}/documents/{doc}"
         directory = tmp_path / "private" / matter / doc
 
-        def fail(path: Path) -> None:
-            (path / "extracted.txt").unlink()
+        def fail(self: MatterStore, matter_id: str, document_id: str) -> None:
+            (self.private_root / matter_id / document_id / "extracted.txt").unlink()
             raise PermissionError("sensitive private path")
 
-        monkeypatch.setattr("lextrace.matter.store.shutil.rmtree", fail)
+        monkeypatch.setattr(MatterStore, "_remove_private_directory", fail)
         response = client.delete(url)
         assert response.status_code == 400
         assert "manual cleanup" in response.json()["detail"]
         assert "sensitive" not in response.text
         assert client.get(url).status_code == 404
         assert (directory / "source.txt").exists()
+        monkeypatch.undo()
+        assert client.delete(url).status_code == 204
+        assert not directory.exists()
+        assert client.delete(url).status_code == 404

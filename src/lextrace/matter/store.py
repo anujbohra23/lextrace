@@ -1,6 +1,7 @@
 """Single-host SQLite matter records and private document files."""
 
 import hashlib
+import os
 import re
 import shutil
 import sqlite3
@@ -67,7 +68,8 @@ class MatterStore:
         database.parent.mkdir(parents=True, exist_ok=True)
         private_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         private_root.chmod(0o700)
-        self.private_root = private_root
+        self.private_root = private_root.absolute()
+        self._root_identity = private_root.stat()
         self._lock = threading.RLock()
         self._db = sqlite3.connect(database, check_same_thread=False)
         database.chmod(0o600)
@@ -77,6 +79,9 @@ class MatterStore:
                 """
                 PRAGMA foreign_keys=ON;
                 PRAGMA journal_mode=WAL;
+                CREATE TABLE IF NOT EXISTS private_cleanup_v1 (
+                  matter_id TEXT NOT NULL, document_id TEXT NOT NULL,
+                  PRIMARY KEY(matter_id,document_id));
                 CREATE TABLE IF NOT EXISTS matters (
                   id TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS matter_documents (
@@ -221,38 +226,36 @@ class MatterStore:
 
     def delete_matter(self, matter_id: str) -> bool:
         _id(matter_id)
-        with self._lock, self._db:
-            exists = self._db.execute(
-                "SELECT 1 FROM matters WHERE id=?", (matter_id,)
-            ).fetchone()
-            if exists is None:
-                return False
-            active = self._db.execute(
-                "SELECT COUNT(*) FROM matter_jobs WHERE matter_id=? "
-                "AND status IN ('queued','running')",
-                (matter_id,),
-            ).fetchone()[0]
-            if active:
-                raise MatterError("Wait for matter analysis to finish before deletion.")
-            private_directory = self.private_root / matter_id
-            if private_directory.exists():
-                try:
-                    shutil.rmtree(private_directory)
-                except OSError as exc:
-                    raise MatterError(
-                        "Private matter files could not be removed."
-                    ) from exc
-            removed = self._db.execute(
-                "DELETE FROM matters WHERE id=?", (matter_id,)
-            ).rowcount
-        return bool(removed)
+        with self._lock:
+            try:
+                with self._db:
+                    self._db.execute("BEGIN IMMEDIATE")
+                    exists = self._db.execute(
+                        "SELECT 1 FROM matters WHERE id=?", (matter_id,)
+                    ).fetchone()
+                    if exists is None:
+                        return self._retry_cleanup(matter_id, "")
+                    active = self._db.execute(
+                        "SELECT 1 FROM matter_jobs WHERE matter_id=? "
+                        "AND status IN ('queued','running') LIMIT 1",
+                        (matter_id,),
+                    ).fetchone()
+                    if active:
+                        raise MatterError(
+                            "Wait for matter analysis to finish before deletion."
+                        )
+                    self._db.execute(
+                        "INSERT OR IGNORE INTO private_cleanup_v1 VALUES (?,?)",
+                        (matter_id, ""),
+                    )
+                    self._db.execute("DELETE FROM matters WHERE id=?", (matter_id,))
+            except sqlite3.Error as exc:
+                raise MatterError("Matter metadata deletion failed.") from exc
+            self._retry_cleanup(matter_id, "")
+        return True
 
     def delete_document(self, matter_id: str, document_id: str) -> bool:
-        """Delete an unreferenced document, committing metadata before file cleanup.
-
-        A cleanup failure leaves private orphan files, never live document metadata
-        pointing at partially removed files. Such failures require manual cleanup.
-        """
+        """Retire metadata and queue cleanup atomically before touching files."""
         _id(matter_id)
         _id(document_id)
         with self._lock:
@@ -260,7 +263,7 @@ class MatterStore:
                 with self._db:
                     self._db.execute("BEGIN IMMEDIATE")
                     if self.get_document(matter_id, document_id) is None:
-                        return False
+                        return self._retry_cleanup(matter_id, document_id)
                     active = self._db.execute(
                         "SELECT 1 FROM matter_jobs WHERE matter_id=? AND document_id=? "
                         "AND status IN ('queued','running') LIMIT 1",
@@ -288,6 +291,10 @@ class MatterStore:
                                 "deletion is unavailable."
                             )
                     self._db.execute(
+                        "INSERT OR IGNORE INTO private_cleanup_v1 VALUES (?,?)",
+                        (matter_id, document_id),
+                    )
+                    self._db.execute(
                         "DELETE FROM matter_jobs WHERE matter_id=? AND document_id=?",
                         (matter_id, document_id),
                     )
@@ -299,23 +306,94 @@ class MatterStore:
                     )
             except sqlite3.Error as exc:
                 raise MatterError("Document metadata deletion failed.") from exc
-            directory = self.private_root / matter_id / document_id
-            try:
-                shutil.rmtree(directory)
-            except FileNotFoundError:
-                # Only an absent root is already clean; a missing child can signal
-                # an interrupted or concurrently modified cleanup.
-                if directory.exists() or directory.is_symlink():
-                    raise MatterError(
-                        "Document metadata was deleted, but private file cleanup "
-                        "failed; manual cleanup is required."
-                    ) from None
-            except OSError as exc:
-                raise MatterError(
-                    "Document metadata was deleted, but private file cleanup "
-                    "failed; manual cleanup is required."
-                ) from exc
+            self._retry_cleanup(matter_id, document_id)
         return True
+
+    def _retry_cleanup(self, matter_id: str, document_id: str) -> bool:
+        """Caller holds the lock; leave durable intent intact on every failure."""
+        if (
+            self._db.execute(
+                "SELECT 1 FROM private_cleanup_v1 WHERE matter_id=? AND document_id=?",
+                (matter_id, document_id),
+            ).fetchone()
+            is None
+        ):
+            return False
+        try:
+            self._remove_private_directory(matter_id, document_id)
+            with self._db:
+                self._db.execute(
+                    "DELETE FROM private_cleanup_v1 "
+                    "WHERE matter_id=? AND document_id=?",
+                    (matter_id, document_id),
+                )
+        except (OSError, sqlite3.Error) as exc:
+            raise MatterError(
+                "Metadata was deleted, but private file cleanup failed; "
+                "retry deletion or recovery; manual cleanup may be required."
+            ) from exc
+        return True
+
+    def recover_pending_cleanup(self, *, limit: int = 100) -> tuple[int, int]:
+        """Attempt at most limit durable intents; return (completed, failed).
+
+        Explicit operator operation, safe to repeat after restart. No startup IO.
+        One failed path does not prevent attempts on other selected intents.
+        """
+        if not 1 <= limit <= 1000:
+            raise ValueError("Cleanup limit must be between 1 and 1000.")
+        completed = failed = 0
+        with self._lock:
+            rows = self._db.execute(
+                "SELECT matter_id,document_id FROM private_cleanup_v1 "
+                "ORDER BY matter_id,document_id LIMIT ?",
+                (limit,),
+            ).fetchall()
+            for matter_id, document_id in rows:
+                try:
+                    completed += self._retry_cleanup(matter_id, document_id)
+                except MatterError:
+                    failed += 1
+        return completed, failed
+
+    def _remove_private_directory(self, matter_id: str, document_id: str) -> None:
+        # FD-relative traversal pins ancestors against symlink replacement. Python's
+        # fd-based rmtree checks directory identities and never follows child links.
+        _id(matter_id)
+        if document_id:
+            _id(document_id)
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise OSError("Safe private cleanup is unavailable.")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        root_fd = os.open(self.private_root, flags)
+        try:
+            if not os.path.samestat(os.fstat(root_fd), self._root_identity):
+                raise OSError("Private storage root changed.")
+            if document_id:
+                try:
+                    matter_fd = os.open(matter_id, flags, dir_fd=root_fd)
+                except FileNotFoundError:
+                    return
+                try:
+                    self._remove_at(document_id, matter_fd)
+                finally:
+                    os.close(matter_fd)
+            else:
+                self._remove_at(matter_id, root_fd)
+        finally:
+            os.close(root_fd)
+
+    @staticmethod
+    def _remove_at(name: str, parent_fd: int) -> None:
+        try:
+            shutil.rmtree(name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            # A missing child during traversal is not proof the root is gone.
+            try:
+                os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                return
+            raise
 
     def add_document(
         self, matter_id: str, filename: str, content: bytes
@@ -346,37 +424,44 @@ class MatterStore:
         version = document_version(document, content, extracted)
         sections = segment_document(document_id, digest, extracted)
         directory = self.private_root / matter_id / document_id
-        try:
-            with self._lock:
+        with self._lock:
+            created = False
+            try:
                 migrate(self._db)
-            directory.mkdir(parents=True, exist_ok=False, mode=0o700)
-        except (OSError, sqlite3.Error) as exc:
-            raise MatterError("Document storage initialization failed.") from exc
-        try:
-            source_file = directory / f"source.{kind}"
-            text_file = directory / "extracted.txt"
-            source_file.write_bytes(content)
-            text_file.write_bytes(extracted.text.encode("utf-8"))
-            source_file.chmod(0o600)
-            text_file.chmod(0o600)
-            with self._lock, self._db:
-                self._db.execute(
-                    "INSERT INTO matter_documents VALUES (?,?,?)",
-                    (document_id, matter_id, document.model_dump_json()),
-                )
-                InvestigationRepository.register_in_transaction(self._db, version)
-                self._db.executemany(
-                    "INSERT INTO document_sections VALUES (?,?,?)",
-                    [
-                        (s.section_id, document_id, s.model_dump_json())
-                        for s in sections
-                    ],
-                )
-        except Exception as exc:
-            shutil.rmtree(directory, ignore_errors=True)
-            raise MatterError(
-                "Document storage or investigation registration failed."
-            ) from exc
+                with self._db:
+                    self._db.execute("BEGIN IMMEDIATE")
+                    if self.get_matter(matter_id) is None:
+                        raise MatterError("Matter was not found.")
+                    directory.mkdir(parents=True, exist_ok=False, mode=0o700)
+                    created = True
+                    source_file = directory / f"source.{kind}"
+                    text_file = directory / "extracted.txt"
+                    source_file.write_bytes(content)
+                    text_file.write_bytes(extracted.text.encode("utf-8"))
+                    source_file.chmod(0o600)
+                    text_file.chmod(0o600)
+                    self._db.execute(
+                        "INSERT INTO matter_documents VALUES (?,?,?)",
+                        (document_id, matter_id, document.model_dump_json()),
+                    )
+                    InvestigationRepository.register_in_transaction(self._db, version)
+                    self._db.executemany(
+                        "INSERT INTO document_sections VALUES (?,?,?)",
+                        [
+                            (s.section_id, document_id, s.model_dump_json())
+                            for s in sections
+                        ],
+                    )
+            except Exception as exc:
+                # Use the same constrained cleanup path for an unpublished upload.
+                if created:
+                    try:
+                        self._remove_private_directory(matter_id, document_id)
+                    except OSError:
+                        pass
+                raise MatterError(
+                    "Document storage or investigation registration failed."
+                ) from exc
         return document
 
     def _register_existing_document(self, document: MatterDocument) -> None:
