@@ -43,7 +43,7 @@ from lextrace.investigations.inconsistency_investigation import (
 from lextrace.investigations.repository import InvestigationRepository
 from lextrace.investigations.review import target_of
 from lextrace.matter.store import MatterStore
-from lextrace.research.contracts import Usage
+from lextrace.research.contracts import ResearchError, Usage
 from lextrace.research.llm import Output
 from lextrace.research.prompts import PromptDefinition
 from tests.unit.test_investigation_review import command
@@ -510,7 +510,7 @@ def test_model_and_search_failure_safe(runtime: Runtime) -> None:
     pair = runtime.pair()
 
     def fail() -> None:
-        raise RuntimeError("PRIVATE SECRET")
+        raise ResearchError("PRIVATE SECRET", category="provider_error")
 
     runtime.reasoner.hook = fail
     output = runtime.run(pair)
@@ -649,6 +649,30 @@ def test_malformed_output_and_no_free_prose(runtime: Runtime) -> None:
     result = runtime.run(pair)
     assert not result.findings and result.diagnostics[0].code == "MODEL_FAILED"
     assert "GUILTY" not in result.model_dump_json()
+
+
+def test_model_failure_identifies_stage_and_safe_category(runtime: Runtime) -> None:
+    pair = runtime.pair()
+
+    def fail() -> None:
+        raise ResearchError("private provider detail", category="provider_timeout")
+
+    runtime.reasoner.hook = fail
+    result = runtime.run(pair)
+    detail = next(d for d in result.diagnostics if d.stage == "reasoner")
+    assert detail.code == "MODEL_FAILED" and detail.reason == "provider_timeout"
+    assert "private provider detail" not in result.model_dump_json()
+
+
+def test_unexpected_programming_errors_are_not_model_failures(runtime: Runtime) -> None:
+    pair = runtime.pair()
+
+    def bug() -> None:
+        raise RuntimeError("programming defect")
+
+    runtime.reasoner.hook = bug
+    with pytest.raises(RuntimeError, match="programming defect"):
+        runtime.run(pair)
 
 
 def test_publication_boundary_rechecks_all_reviews(

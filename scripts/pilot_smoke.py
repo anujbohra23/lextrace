@@ -36,7 +36,7 @@ from lextrace.investigations.workflow import (
     InvestigationWorkflow,
 )
 from lextrace.matter.store import MatterStore
-from lextrace.research.contracts import Usage
+from lextrace.research.contracts import ResearchError, Usage
 from lextrace.research.ollama import OllamaLLM
 from lextrace.research.prompts import PromptDefinition
 
@@ -335,6 +335,16 @@ def smoke(root: Path, provider: Any, *, with_findings: bool = False) -> dict[str
                 if intermediate.result
                 else []
             )
+            result["reasoning_failures"] = (
+                [
+                    {"stage": d.stage, "reason": d.reason}
+                    for d in intermediate.result.diagnostics
+                    if d.code == "MODEL_FAILED" and d.stage is not None
+                ]
+                if intermediate.result
+                else []
+            )
+            result["calls_after_reasoning"] = provider.usage.calls
             if second["checkpoint"] != "findings":
                 result["remaining_stages"] = (
                     "BLOCKED: no findings checkpoint after evidence review"
@@ -525,6 +535,11 @@ class FixtureLLM:
         self, prompt: PromptDefinition, schema: type[Output], context: dict[str, object]
     ) -> Output:
         self.usage.calls += 1
+        if schema.__name__ == "Hypothesis":
+            raise ResearchError(
+                "The deterministic extraction fixture has no reasoning output.",
+                category="fixture_output_unavailable",
+            )
         text = str(context["text"])
         quote = text.split("\n")[2]
         speaker = next(
@@ -563,7 +578,7 @@ def main() -> None:
     provider = (
         OllamaLLM(
             args.model,
-            timeout=90,
+            timeout=180,
             max_retries=0,
             max_completion_tokens=8192,
             context_tokens=16384,

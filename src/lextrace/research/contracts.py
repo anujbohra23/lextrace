@@ -12,6 +12,10 @@ from lextrace.retrieval.contracts import Mode, Record, RetrievalResult
 class ResearchError(Exception):
     """Safe workflow/provider error without prompt, evidence, or credential text."""
 
+    def __init__(self, message: str, *, category: str = "provider_error") -> None:
+        super().__init__(message)
+        self.category = category
+
 
 class LegalIssue(Record):
     issue_id: str

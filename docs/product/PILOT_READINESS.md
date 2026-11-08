@@ -1,5 +1,99 @@
 # M11 pilot readiness — FAIL (acceptance blocked)
 
+## Final inconsistency-reasoning remediation — current assessment
+
+**Overall: FAIL / blocked.** The single bounded live run reached M6 inconsistency
+reasoning, then stopped before findings review. No publication, M9 approval or
+DOCX export occurred in this run. The durable source-attribution and start-request
+work from prior sections remains preserved.
+
+### Diagnosis and minimal change
+
+The previous run classified both reasoner and verifier failures as the same
+`MODEL_FAILED`, and also swallowed arbitrary exceptions. This pass added safe,
+text-free stage and reason categories. The new live run identifies the exact
+failure as **reasoner / provider_timeout**. The verifier was not called. It was
+not malformed JSON, schema validation, an unsupported output schema, or evidence
+reference rejection. The qwen3:8b reasoner exceeded the smoke harness's 90-second
+HTTP timeout. Ollama's provider default and application setting are both 180
+seconds; the smoke harness alone had overridden them to 90. The harness timeout
+now matches that bounded 180-second setting. This correction is plausible but was
+not live-retested because the one permitted attempt was consumed.
+
+Ollama adapter failures now carry a closed, non-sensitive category (timeout,
+transport, HTTP error, malformed/empty/truncated response or schema/JSON error).
+M6 records the failing stage and category in structured diagnostics and logs only
+those values. Schema validation failures are handled explicitly. Unexpected
+programming exceptions now propagate instead of being mislabeled as model
+failures. Existing exact evidence ID checks, independent verifier requirements,
+status downgrade behavior and no-retry smoke policy remain intact.
+
+### One bounded live attempt
+
+Provider/model: local Ollama `qwen3:8b`; smoke configuration at time of run:
+temperature 0, 16,384 context tokens, 8,192 completion tokens, 90-second request
+timeout, zero retries, at most three extraction calls, one candidate pair, one
+search and two reasoning calls. The run used isolated synthetic sources and
+TEST-ONLY review decisions only. The timeout has since been raised to 180 seconds
+to align with application configuration; there was no second live call.
+
+| Stage | Result / evidence |
+| --- | --- |
+| Health/auth/isolation | PASS: 200 health, anonymous 401, foreign matter read 404 |
+| Upload/source selection/start | PASS: three READY sources, three eligible versions, start 201 |
+| Extraction | PASS with limitation: 14 verified records; one candidate quarantined for `UNSOURCED_ASSERTION_STRUCTURE` |
+| Evidence review | TEST-ONLY review submitted after exact provenance checks; four supported source-account records |
+| Candidate formation/search | PASS: one candidate pair formed and one bounded search ran |
+| Reasoning | BLOCKED: `stage=reasoner`, `reason=provider_timeout`; one call, zero retries |
+| Findings review/publication | NOT REACHED; workflow correctly returned `SERVICE_FAILED` |
+| M9/deposition approval/DOCX/restart | NOT REACHED in this live run |
+
+The run made three extraction calls and one reasoning call (four total). The
+timeout was text-free and did not expose prompt, model output, source text, token
+or path. The blocked run is not evidence that the model can complete the schema
+within the corrected timeout. No approval was forced after the reasoner failed.
+
+### Regression and quality checks
+
+New regressions cover safe reasoner-stage categorization, Ollama truncation
+classification and propagation of unexpected programming errors. The existing
+deterministic fixture suite and extraction/recovery/publication/export tests also
+passed:
+
+```sh
+pytest tests/unit/test_ollama_provider.py tests/unit/test_inconsistency_investigation.py tests/unit/test_investigation_factual_extraction.py tests/unit/test_investigation_extraction_verification.py tests/unit/test_investigation_durable.py tests/unit/test_investigation_workflow.py tests/integration/test_source_accounts.py tests/integration/test_pilot_smoke.py tests/integration/test_start_request_recovery.py tests/integration/test_deposition_recovery.py tests/api/test_investigations.py tests/api/test_deposition_api.py tests/api/test_exports.py tests/unit/test_docx_exports.py tests/integration/test_export_integrity.py -q --tb=short
+# 346 passed, 0 failed (29.62 seconds)
+ruff check src/lextrace/investigations/findings.py src/lextrace/investigations/inconsistency_investigation.py src/lextrace/research/contracts.py src/lextrace/research/ollama.py scripts/pilot_smoke.py tests/unit/test_ollama_provider.py tests/unit/test_inconsistency_investigation.py tests/integration/test_pilot_smoke.py
+# passed
+ruff format --check src/lextrace/investigations/findings.py src/lextrace/investigations/inconsistency_investigation.py src/lextrace/research/contracts.py src/lextrace/research/ollama.py scripts/pilot_smoke.py tests/unit/test_ollama_provider.py tests/unit/test_inconsistency_investigation.py tests/integration/test_pilot_smoke.py
+# passed
+mypy src/lextrace/investigations/findings.py src/lextrace/investigations/inconsistency_investigation.py src/lextrace/research/contracts.py src/lextrace/research/ollama.py scripts/pilot_smoke.py tests/unit/test_ollama_provider.py tests/unit/test_inconsistency_investigation.py tests/integration/test_pilot_smoke.py
+# Success: no issues found in 8 source files
+git diff --check                          # passed
+python scripts/pilot_smoke.py --live --with-findings
+# one bounded run; blocked at reasoner timeout
+```
+
+The 346 tests are deterministic/offline except that the separately reported live
+smoke genuinely contacted local Ollama. They do not certify general extraction or
+reasoning quality. No frontend changes or browser validation were performed.
+
+### Remaining risks and acceptance
+
+- The new 180-second bound has not been exercised live. A slow or stuck provider
+  will still block the workflow safely; retries remain zero in pilot smoke.
+- One extraction assertion was quarantined in this run. The accepted records
+  retained exact source verification; this is not an extraction recall result.
+- Findings, signed publication, M9, both DOCX exports and live restart read-back
+  are unverified for this run. Earlier deterministic tests do not substitute for
+  those live stages.
+- Manual browser upload/review/download validation and deployment configuration
+  remain outstanding.
+
+Pilot readiness therefore remains **FAIL / BLOCKED**. Do not treat the TEST-ONLY
+reviewer as professional approval or use this result to authorize real matters.
+No commit or push was made.
+
 ## Focused extraction-attribution remediation — latest assessment
 
 **Source attribution: PASS for the tested layouts and this live fixture. Full

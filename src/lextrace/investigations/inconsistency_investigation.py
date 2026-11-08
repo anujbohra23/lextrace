@@ -7,8 +7,11 @@ Caller-supplied VALID states and M6A currency lists are never authority here.
 """
 
 import json
+import logging
 from hashlib import sha256
-from typing import Protocol
+from typing import Literal, Protocol
+
+from pydantic import ValidationError
 
 from lextrace.investigations.contracts import (
     AttributedAssertion,
@@ -41,12 +44,26 @@ from lextrace.investigations.provenance import validate_evidence_reference
 from lextrace.investigations.repository import InvestigationRepository
 from lextrace.investigations.review import Candidate, RecordDependency, target_of
 from lextrace.matter.store import MatterStore
+from lextrace.research.contracts import ResearchError
 from lextrace.research.llm import StructuredLLM
 from lextrace.research.prompts import PromptDefinition
 
 
 class ContextSearch(Protocol):
     def search(self, request: EvidenceSearchRequest) -> EvidenceSearchResult: ...
+
+
+ModelFailureReason = Literal[
+    "provider_timeout",
+    "provider_transport",
+    "provider_http_error",
+    "provider_error",
+    "malformed_response",
+    "empty_output",
+    "truncated_output",
+    "schema_or_json_validation",
+    "invalid_schema",
+]
 
 
 REASON = PromptDefinition(
@@ -269,6 +286,9 @@ class InconsistencyInvestigationService:
         findings: list[Finding] = []
         sources: tuple[SourceIdentity, ...] = ()
         counts: dict[str, int] = {}
+        model_failures: list[
+            tuple[Literal["reasoner", "verifier"], ModelFailureReason]
+        ] = []
         searches = calls = 0
         dependencies: dict[str, RecordDependency] = {}
         accepted_pairs: list[CandidatePair] = []
@@ -281,8 +301,17 @@ class InconsistencyInvestigationService:
                 findings=tuple(findings),
                 sources=sources,
                 diagnostics=tuple(
-                    InvestigationDiagnostic.model_validate(dict(code=k, count=v))
-                    for k, v in sorted(counts.items())
+                    [
+                        InvestigationDiagnostic.model_validate(dict(code=k, count=v))
+                        for k, v in sorted(counts.items())
+                        if k != "MODEL_FAILED" or not model_failures
+                    ]
+                    + [
+                        InvestigationDiagnostic(
+                            code="MODEL_FAILED", count=1, stage=stage, reason=reason
+                        )
+                        for stage, reason in model_failures
+                    ]
                 ),
                 dependencies=tuple(dependencies[k] for k in sorted(dependencies)),
                 searches=searches,
@@ -422,8 +451,21 @@ class InconsistencyInvestigationService:
                 if not self._assessment(h, refs):
                     note("INVALID_CITATION")
                     continue
-            except Exception:
+            except ResearchError as error:
                 note("MODEL_FAILED")
+                reason = _safe_model_failure(error.category)
+                model_failures.append(("reasoner", reason))
+                logging.getLogger(__name__).warning(
+                    "inconsistency model call failed stage=reasoner reason=%s", reason
+                )
+                continue
+            except ValidationError:
+                note("MODEL_FAILED")
+                model_failures.append(("reasoner", "invalid_schema"))
+                logging.getLogger(__name__).warning(
+                    "inconsistency model call failed stage=%s reason=invalid_schema",
+                    "reasoner",
+                )
                 continue
             try:
                 if self._versions(matter_id, approved_versions) != versions:
@@ -439,8 +481,21 @@ class InconsistencyInvestigationService:
                 if not self._assessment(v, refs):
                     note("INVALID_CITATION")
                     continue
-            except Exception:
+            except ResearchError as error:
                 note("MODEL_FAILED")
+                reason = _safe_model_failure(error.category)
+                model_failures.append(("verifier", reason))
+                logging.getLogger(__name__).warning(
+                    "inconsistency model call failed stage=verifier reason=%s", reason
+                )
+                continue
+            except ValidationError:
+                note("MODEL_FAILED")
+                model_failures.append(("verifier", "invalid_schema"))
+                logging.getLogger(__name__).warning(
+                    "inconsistency model call failed stage=%s reason=invalid_schema",
+                    "verifier",
+                )
                 continue
             # Independent assessment must agree on all premises/roles, not just verdict.
             supported = (
@@ -567,3 +622,17 @@ class InconsistencyInvestigationService:
             findings.clear()
             note("CURRENCY_CHANGED")
         return finish()
+
+
+def _safe_model_failure(category: str) -> ModelFailureReason:
+    allowed: dict[str, ModelFailureReason] = {
+        "provider_timeout": "provider_timeout",
+        "provider_transport": "provider_transport",
+        "provider_http_error": "provider_http_error",
+        "provider_error": "provider_error",
+        "malformed_response": "malformed_response",
+        "empty_output": "empty_output",
+        "truncated_output": "truncated_output",
+        "schema_or_json_validation": "schema_or_json_validation",
+    }
+    return allowed.get(category, "provider_error")

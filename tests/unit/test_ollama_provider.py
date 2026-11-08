@@ -108,6 +108,19 @@ def test_network_failure_is_safe(error: Exception) -> None:
     llm.close()
 
 
+def test_truncated_output_reports_safe_category() -> None:
+    response = _response('{"label":"partial"}')
+    body = response.json()
+    body["done_reason"] = "length"
+    response = httpx.Response(200, json=body)
+    llm = OllamaLLM("qwen3:8b", transport=httpx.MockTransport(lambda _: response))
+    with pytest.raises(ResearchError) as captured:
+        llm.generate(PROMPT, Issue, {})
+    assert captured.value.category == "truncated_output"
+    assert "partial" not in str(captured.value)
+    llm.close()
+
+
 def test_configuration_and_cache_identity(tmp_path: Path) -> None:
     with pytest.raises(ResearchError, match="configuration"):
         OllamaLLM("qwen3:8b", base_url="https://outside.example")

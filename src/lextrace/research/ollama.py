@@ -105,16 +105,32 @@ class OllamaLLM:
                         self.retries += 1
                         time.sleep(min(2**attempt, 2))
                         continue
-                    raise ResearchError("Local Ollama generation failed.")
+                    raise ResearchError(
+                        "Local Ollama generation failed.",
+                        category="provider_http_error",
+                    )
                 if response.status_code != 200:
-                    raise ResearchError("Local Ollama generation failed.")
+                    raise ResearchError(
+                        "Local Ollama generation failed.",
+                        category="provider_http_error",
+                    )
                 body = response.json()
                 if not isinstance(body, dict):
-                    raise ResearchError("Ollama returned malformed structured output.")
+                    raise ResearchError(
+                        "Ollama returned malformed structured output.",
+                        category="malformed_response",
+                    )
                 message = body.get("message")
                 content = message.get("content") if isinstance(message, dict) else None
                 if not isinstance(content, str) or not content.strip():
-                    raise ResearchError("Ollama returned no structured output.")
+                    raise ResearchError(
+                        "Ollama returned no structured output.", category="empty_output"
+                    )
+                if body.get("done_reason") == "length":
+                    raise ResearchError(
+                        "Ollama output exceeded the completion limit.",
+                        category="truncated_output",
+                    )
                 result = schema.model_validate_json(content)
                 self.usage.input_tokens += _nonnegative_int(
                     body.get("prompt_eval_count")
@@ -127,11 +143,21 @@ class OllamaLLM:
                 return result
             except (ValidationError, ValueError, TypeError):
                 raise ResearchError(
-                    "Ollama returned malformed structured output."
+                    "Ollama returned malformed structured output.",
+                    category="schema_or_json_validation",
                 ) from None
-            except (httpx.TimeoutException, httpx.NetworkError):
+            except httpx.TimeoutException:
                 if attempt == self._max_retries:
-                    raise ResearchError("Local Ollama is unavailable.") from None
+                    raise ResearchError(
+                        "Local Ollama is unavailable.", category="provider_timeout"
+                    ) from None
+                self.retries += 1
+                time.sleep(min(2**attempt, 2))
+            except httpx.NetworkError:
+                if attempt == self._max_retries:
+                    raise ResearchError(
+                        "Local Ollama is unavailable.", category="provider_transport"
+                    ) from None
                 self.retries += 1
                 time.sleep(min(2**attempt, 2))
         raise ResearchError("Local Ollama generation failed.")

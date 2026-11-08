@@ -135,6 +135,21 @@ class InvestigationDiagnostic(ReviewContract):
         "CURRENCY_CHANGED",
     ]
     count: Annotated[int, Field(gt=0)]
+    stage: Literal["reasoner", "verifier"] | None = None
+    reason: (
+        Literal[
+            "provider_timeout",
+            "provider_transport",
+            "provider_http_error",
+            "provider_error",
+            "malformed_response",
+            "empty_output",
+            "truncated_output",
+            "schema_or_json_validation",
+            "invalid_schema",
+        ]
+        | None
+    ) = None
 
 
 class InvestigationResult(ReviewContract):
