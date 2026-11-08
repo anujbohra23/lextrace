@@ -29,6 +29,7 @@ from starlette.concurrency import run_in_threadpool
 
 from lextrace.api.auth import authenticate_operator
 from lextrace.api.deposition import deposition_router
+from lextrace.api.exports import export_router
 from lextrace.api.investigations import investigation_router
 from lextrace.config import (
     APP_TITLE,
@@ -443,11 +444,13 @@ def create_app(
         )
     )
     application.include_router(deposition_router(get_matter_store, get_investigations))
+    application.include_router(export_router(get_matter_store, get_investigations))
     application.add_middleware(
         CORSMiddleware,
         allow_origins=configured.cors_origins,
         allow_methods=["GET", "POST", "PATCH", "DELETE"],
         allow_headers=["content-type", "x-request-id", "authorization"],
+        expose_headers=["Content-Disposition"],
     )
 
     @application.exception_handler(MatterError)

@@ -8,6 +8,7 @@ import {
   ApprovedVersion, decisionStorageKey, investigationBase, InvestigationDecision,
   InvestigationView, Json, PublishedSnapshot,
 } from "@/lib/investigations";
+import { DocxDownload } from "./DocxDownload";
 import { InvestigationData, InvestigationReview } from "./InvestigationReview";
 
 export function investigationError(error: unknown): string {
@@ -146,6 +147,7 @@ export function InvestigationWorkspace({ matterId, threadId }: {
     {error && <p role="alert" className="notice">{error}</p>}
     {!loaded && <p role="status">Loading investigations…</p>}
     <div className="review-actions"><button disabled={busy} onClick={() => void reload()}>Refresh server status</button>{threadId && <><Link href={base}>All investigations →</Link><Link href={`${base}/${encodeURIComponent(threadId)}/deposition`}>Deposition preparation →</Link></>}</div>
+    {threadId && <DocxDownload path={`${base}/${encodeURIComponent(threadId)}/export.docx`} label="Download investigation report" filename="lextrace-investigation-report.docx" disabled={busy || run?.stage !== "APPROVED" || !run.snapshot_id} reason="A current signed investigation snapshot is required for Word export." />}
     {!threadId && <><h2>Existing investigations</h2><div className="matter-cards">{runs.map((item) => <Link key={item.thread_id} href={`${base}/${encodeURIComponent(item.thread_id)}`}><strong>Run {item.run_id}</strong><span>{item.stage} · {item.checkpoint ? `${item.checkpoint} review` : "No active review"}</span></Link>)}</div>{loaded && runs.length === 0 && <p>No investigations are available.</p>}
       <section className="workspace"><h2>Start investigation</h2><p>Select eligible active document versions. READY sources are selectable; this does not imply human approval of their contents. Starting creates a new run; refresh the list before repeating an uncertain start.</p>
         {loaded && eligibleVersions.length === 0 && <p className="notice">No eligible document versions are available. Upload a readable document with READY status and a registered active version, then refresh.</p>}

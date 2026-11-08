@@ -57,6 +57,7 @@ it("reviews evidence with exact provenance, record commands and entity links", a
   vi.stubGlobal("fetch", fetchMock);
   render(<InvestigationWorkspace matterId="matter" threadId="thread" />);
   expect(await screen.findByText("The source account.")).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Download investigation report" })).toBeDisabled();
   expect(screen.getByText(/characters 4–24/)).toBeInTheDocument();
   const approve = screen.getByRole("button", { name: "Approve evidence review" });
   expect(approve).toBeDisabled();
@@ -187,6 +188,7 @@ it("reads published metadata and signed artifacts only through scoped authentica
   }); vi.stubGlobal("fetch", fetchMock);
   render(<InvestigationWorkspace matterId="matter" threadId="thread" />);
   await screen.findByText("Signed by operator");
+  expect(screen.getByRole("button", { name: "Download investigation report" })).toBeEnabled();
   fireEvent.click(screen.getByRole("button", { name: "Read signed chronology" }));
   await screen.findByText("Signed chronology policy");
   fireEvent.click(screen.getByRole("button", { name: "Read signed finding 1" }));

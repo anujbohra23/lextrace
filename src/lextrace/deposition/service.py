@@ -53,14 +53,17 @@ class DepositionService:
 
     @contextmanager
     def published(
-        self, matter: str, thread: str
+        self, matter: str, thread: str, *, recover: bool = True
     ) -> Iterator[tuple[sqlite3.Connection, PublishedContext]]:
         try:
             self.workflow.services.store.require_investigation_matter(matter, thread)
         except MatterError:
             raise PlanError("DEPOSITION_NOT_FOUND", 404) from None
         try:
-            self.workflow.reopen(thread)
+            if recover:
+                self.workflow.reopen(thread)
+            elif self.workflow.inspect(thread).stage != "APPROVED":
+                raise PlanError("DEPOSITION_SOURCE_CONFLICT")
             snapshot = self.workflow.approved_snapshot(thread)
             state = self.workflow.inspect(thread)
             if snapshot.artifact_digest is None:
@@ -361,27 +364,44 @@ class DepositionService:
             )
             return PlanView(basis=view.basis, current=revision)
 
+    def approved_in_context(
+        self,
+        db: sqlite3.Connection,
+        context: PublishedContext,
+        plan_id: str,
+        revision: int | None,
+    ) -> PlanView:
+        """Read an exact approved revision inside an existing publication fence.
+
+        None requires the current revision to be approved; it never selects an
+        older approval automatically. Explicit historical reads retain M9 semantics.
+        """
+        view = self._read(db, context, plan_id)
+        history = PlanStorage.revisions(db, plan_id)
+        if revision is None:
+            if view.current.status != "APPROVED":
+                raise PlanError("DEPOSITION_APPROVAL_REQUIRED")
+            revision = view.current.revision
+        if (
+            revision < 1
+            or revision > len(history)
+            or history[revision - 1].status != "APPROVED"
+        ):
+            raise PlanError("DEPOSITION_APPROVAL_NOT_FOUND", 404)
+        approved = history[revision - 1]
+        return PlanView(
+            basis=view.basis,
+            current=approved.model_copy(
+                update={
+                    "questions": tuple(
+                        q for q in approved.questions if q.disposition == "INCLUDE"
+                    )
+                }
+            ),
+        )
+
     def approved(
         self, matter: str, thread: str, plan_id: str, revision: int
     ) -> PlanView:
         with self.published(matter, thread) as (db, context):
-            view = self._read(db, context, plan_id)
-            history = PlanStorage.revisions(db, plan_id)
-            if (
-                revision < 1
-                or revision > len(history)
-                or history[revision - 1].status != "APPROVED"
-            ):
-                raise PlanError("DEPOSITION_APPROVAL_NOT_FOUND", 404)
-            approved = history[revision - 1]
-            # Rejected/deferred questions are audit material, never approved content.
-            return PlanView(
-                basis=view.basis,
-                current=approved.model_copy(
-                    update={
-                        "questions": tuple(
-                            q for q in approved.questions if q.disposition == "INCLUDE"
-                        )
-                    }
-                ),
-            )
+            return self.approved_in_context(db, context, plan_id, revision)

@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, ApiError } from "@/lib/api";
 import { depositionPath, PlanRevision, PlanSummary, PlanView, Question, ReviewAction } from "@/lib/deposition";
 import { InvestigationView, Json } from "@/lib/investigations";
+import { DocxDownload } from "./DocxDownload";
 import { InvestigationData } from "./InvestigationReview";
 
 function feedback(error: unknown): string {
@@ -102,11 +103,12 @@ export function DepositionWorkspace({ matterId, threadId, planId }: { matterId: 
       <button disabled={!valid || busy || !!pending || !run?.snapshot_id || run.stage !== "APPROVED"} onClick={() => send({ snapshot_id: run?.snapshot_id, request_id: crypto.randomUUID() })}>Create deposition plan</button>
       <h2>Existing plans</h2><div className="matter-cards">{plans.map((item) => <Link key={item.plan_id} href={`${root}/deposition/${item.plan_id}`}><strong>Plan {item.plan_id.slice(0, 12)}</strong><span>{item.status} · revision {item.revision} · {item.outcome} · {item.witness_count} account-scoped witnesses</span></Link>)}</div></>}
     {view && <><h2>{view.current.status} · revision {view.current.revision}</h2><p>{view.basis.outcome} · coverage: {view.basis.coverage.join(", ") || "Not reported"}</p>{view.basis.limitations.length > 0 && <p className="notice">Limitations: {view.basis.limitations.join(", ")}</p>}<p className="evidence-meta">Source snapshot {view.basis.snapshot_id} · artifact {view.basis.artifact_digest}</p>
+      <DocxDownload path={`${path}/export.docx?revision=${view.current.revision}`} label="Download deposition preparation" filename="lextrace-deposition-preparation.docx" disabled={!valid || busy || !!pending || view.current.status !== "APPROVED"} reason="The current deposition plan revision must be explicitly approved before download. Historical approvals can be opened from review history." />
       <WitnessDossiers view={view} />
       <PlanEditor key={`${view.basis.plan_id}:${epoch}`} view={view} disabled={!valid || busy || !!pending} onSubmit={(review) => send({ review })} />
       <h3>Durable review history</h3><ul>{history.map((item) => <li key={item.revision}>Revision {item.revision} · {item.action} · {item.status} · {item.reviewer_id} · {item.timestamp}{item.status === "APPROVED" && <button disabled={busy} onClick={() => void readApproved(item.revision)}>Read approved revision {item.revision}</button>}</li>)}</ul>
     </>}
-    {approved && <section aria-label="Approved deposition material" className="evidence-card"><h2>Human-approved deposition plan · revision {approved.current.revision}</h2>{view && view.current.revision > approved.current.revision && <p className="notice">Historical approval; the current plan has a later revision.</p>}<p>This does not modify the M7 snapshot or prove an allegation.</p>{approved.current.questions.map((q) => <article key={q.question_id}><h3>{q.category.replaceAll("_", " ")}</h3><p>{q.wording}</p><p>{q.rationale}</p><QuestionEvidence view={approved} question={q} /></article>)}</section>}
+    {approved && <section aria-label="Approved deposition material" className="evidence-card"><h2>Human-approved deposition plan · revision {approved.current.revision}</h2>{view && view.current.revision > approved.current.revision && <p className="notice">Historical approval; the current plan has a later revision.</p>}<p>This does not modify the M7 snapshot or prove an allegation.</p><DocxDownload path={`${path}/export.docx?revision=${approved.current.revision}`} label={`Download approved revision ${approved.current.revision}`} filename="lextrace-deposition-preparation.docx" disabled={!valid || busy || !!pending || approved.current.status !== "APPROVED"} reason="A current source snapshot and an approved deposition revision are required." />{approved.current.questions.map((q) => <article key={q.question_id}><h3>{q.category.replaceAll("_", " ")}</h3><p>{q.wording}</p><p>{q.rationale}</p><QuestionEvidence view={approved} question={q} /></article>)}</section>}
   </section>;
 }
 

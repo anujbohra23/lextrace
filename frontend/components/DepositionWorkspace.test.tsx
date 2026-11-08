@@ -54,6 +54,7 @@ it("reviews source-linked questions and requires explicit partial-coverage appro
   }); vi.stubGlobal("fetch", mock);
   render(<DepositionWorkspace matterId="matter" threadId="thread" planId="plan" />);
   await screen.findByLabelText("Question 1");
+  expect(screen.getByRole("button", { name: "Download deposition preparation" })).toBeDisabled();
   expect(screen.getByText("Morgan")).toBeInTheDocument();
   expect(screen.getByText(/CANDIDATES_QUARANTINED/)).toBeInTheDocument();
   expect(screen.getAllByText("Exact witness quote").length).toBeGreaterThan(0);
@@ -124,6 +125,7 @@ it("reads approved material through the approved revision endpoint", async () =>
   render(<DepositionWorkspace matterId="matter" threadId="thread" planId="plan" />);
   fireEvent.click(await screen.findByRole("button", { name: "Read approved revision 2" }));
   const material = await screen.findByRole("region", { name: "Approved deposition material" });
+  expect(within(material).getByRole("button", { name: "Download approved revision 2" })).toBeEnabled();
   expect(within(material).getByText(/Historical approval/)).toBeInTheDocument();
   expect(within(material).getByText(question.wording)).toBeInTheDocument();
   expect(mock.mock.calls.some(([url]) => url.endsWith(`${base}/plan/approved/2`))).toBe(true);
