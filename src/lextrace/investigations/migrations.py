@@ -150,6 +150,34 @@ def migrate(connection: sqlite3.Connection) -> None:
             connection.execute(
                 "INSERT INTO investigation_schema_versions(version) VALUES (4)"
             )
+        if (
+            connection.execute(
+                "SELECT 1 FROM investigation_schema_versions WHERE version=5"
+            ).fetchone()
+            is None
+        ):
+            for statement in (
+                "CREATE TABLE deposition_plans (plan_id TEXT PRIMARY KEY, "
+                "thread_id TEXT NOT NULL REFERENCES investigation_runs(thread_id) "
+                "ON DELETE CASCADE, snapshot_id TEXT NOT NULL REFERENCES "
+                "investigation_snapshots(snapshot_id) ON DELETE CASCADE, "
+                "request_id TEXT NOT NULL, payload TEXT NOT NULL, digest "
+                "TEXT NOT NULL, "
+                "UNIQUE(thread_id,request_id))",
+                "CREATE TABLE deposition_revisions (plan_id TEXT NOT NULL "
+                "REFERENCES deposition_plans(plan_id) ON DELETE CASCADE, "
+                "revision INTEGER NOT NULL, payload TEXT NOT NULL, digest "
+                "TEXT NOT NULL, "
+                "PRIMARY KEY(plan_id,revision))",
+                "CREATE TABLE deposition_decisions (plan_id TEXT NOT NULL "
+                "REFERENCES deposition_plans(plan_id) ON DELETE CASCADE, "
+                "decision_id TEXT NOT NULL, payload TEXT NOT NULL, "
+                "revision INTEGER NOT NULL, PRIMARY KEY(plan_id,decision_id))",
+                "CREATE INDEX deposition_snapshot_plans ON "
+                "deposition_plans(snapshot_id)",
+            ):
+                connection.execute(statement)
+            connection.execute("INSERT INTO investigation_schema_versions VALUES (5)")
         connection.commit()
     except Exception:
         connection.rollback()

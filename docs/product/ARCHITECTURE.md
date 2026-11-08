@@ -422,3 +422,17 @@ M8A exposes the durable investigation workflow through authenticated, matter-sco
 FastAPI adapters. See [Investigation API contracts](INVESTIGATION_API.md) for routes,
 review decisions, snapshot/artifact reads, and recovery behavior. M7 remains the
 sole owner of transitions, approval intents, checkpoints, and publication.
+
+### M9 source-grounded deposition preparation
+
+M9 consumes current M7 approved snapshots and digest-pinned immutable journal
+artifacts through a dedicated deposition service. It generates bounded,
+deterministic, account-scoped witness dossiers and source-linked questions; M7
+subject/participant links are not inferred speaker merges. Every use rechecks
+source provenance, accepted M4 dependencies and the current signed snapshot.
+Migration 5 adds hash-checked deposition basis/revision/decision rows to the
+existing SQLite database, with atomic optimistic human review and idempotent
+replays, and source/run/snapshot deletion cascades. No graph/checkpointer is added
+and no M7 snapshot is changed. See [M9 contracts](DEPOSITION_API.md) for the review
+state machine, limitations, authenticated routes, and frontend recovery semantics.
+M10 DOCX export and M11 extraction/pilot hardening remain separate.

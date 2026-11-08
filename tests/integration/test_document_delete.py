@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 from lextrace.api.app import create_app
 from lextrace.config import AppSettings
@@ -99,9 +100,19 @@ def test_api_and_cleanup_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     settings = AppSettings(
-        matter_db=tmp_path / "db", private_matter_root=tmp_path / "private"
+        matter_db=tmp_path / "db",
+        private_matter_root=tmp_path / "private",
+        operator_id="deletion-test-operator",
+        operator_api_secret=SecretStr(
+            "test-only-credential-00000000000000000000000000"
+        ),
     )
-    with TestClient(create_app(settings=settings)) as client:
+    with TestClient(
+        create_app(settings=settings),
+        headers={
+            "Authorization": "Bearer test-only-credential-00000000000000000000000000",
+        },
+    ) as client:
         matter = client.post("/matters", json={"name": "API"}).json()["matter_id"]
         other = client.post("/matters", json={"name": "Other"}).json()["matter_id"]
 

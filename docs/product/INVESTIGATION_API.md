@@ -155,3 +155,11 @@ offers only those exact server-provided pairs. Empty or unavailable eligibility
 keeps starting disabled. A start conflict clears the old selection and refreshes
 the eligible list without resubmitting. The frontend never derives version IDs
 from document content, readiness alone, or old snapshots.
+
+## M9 deposition preparation
+
+Current approved investigations link to an account-scoped witness and deposition
+workspace. The authenticated deposition endpoints consume the exact signed M7
+artifact revision and do not modify investigation approval or publication.
+See [M9 deposition contracts](DEPOSITION_API.md) for create/read/review/history and
+approved-plan routes, evidence constraints, partial/blocked outcomes and recovery.
