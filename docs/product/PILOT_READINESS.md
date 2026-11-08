@@ -1,5 +1,175 @@
 # M11 pilot readiness — FAIL (acceptance blocked)
 
+## Focused extraction-attribution remediation — latest assessment
+
+**Source attribution: PASS for the tested layouts and this live fixture. Full
+pilot acceptance: BLOCKED / not ready.** This section supersedes the earlier
+account-insufficiency diagnosis below. The one permitted live run now reached
+inconsistency candidate processing but stopped on `MODEL_FAILED`; it did not
+reach findings review, signed publication, deposition approval or either export.
+No subsequent provider attempt was made.
+
+Baseline: branch `feat/investigations-v1`, commit `0776dd5`. The pre-existing
+untracked `scripts/__init__.py` was preserved and is not part of this change.
+No broad M11 audit, UI redesign, DOCX renderer change, dependency installation,
+new model/provider, storage migration, commit or push was performed.
+
+### Diagnosis and changes
+
+The initial regression run reproduced **10 failures**: valid headed accounts
+were left unresolved or lost, while a person merely mentioned in a statement
+could be promoted to its speaker. Source headings were not supplied as context;
+the model was asked to repeat speaker identity inside each quote, and optional
+subject/predicate/object errors could quarantine the entire account. These are
+separate from exact quotation verification, which remains mandatory.
+
+- New `source_attribution.py` recognizes a deliberately narrow grammar: explicit
+  statement-of/by, witness/speaker labels, name-plus-statement headings and named
+  speech prefixes. Metadata must lie in exact trusted source sections. Ambiguous
+  headings, conflicting nested speakers, Q/A, unknown section boundaries and
+  missing source sections terminate or leave attribution unresolved.
+- Actor names and LLM `speaker_quote` proposals never establish source attribution
+  in the new extractor. It resolves the source label from structure, independently
+  of who is mentioned as performing an action. Source labels are not verified
+  real-world identities and are never merged across accounts/documents.
+- Assertions carry an optional `attribution_reference` with exact immutable
+  document/version/section/span identity. Independent M3 verification recomputes
+  the structural association and rejects tampered, foreign, stale or unrelated
+  attribution proofs. The shared M9 published-source reader validates the new
+  reference too; export rendering itself is unchanged.
+- After successful, budgeted source-window processing, explicit source regions
+  recover missing accounts as **verbatim raw source quotations**. This does not
+  accept a rejected model quote or fabricate an event/date/predicate. Recovery
+  obeys processed window/section bounds and the 200-region limit. Existing
+  quarantine warnings remain visible. Deterministic source-label mentions have
+  unresolved entity identity/type (`other`), requiring human association.
+- Prompt identity is `investigation-factual-extraction@3.0.0`; source metadata and
+  nullable speaker guidance replace the requirement to repeat the speaker in
+  each quotation. Deterministic records have their own generator identity,
+  `investigation-source-accounts@1.0.0`, so they are not represented as LLM output.
+- Legacy records without the optional attribution proof remain readable. They
+  are not retroactively recertified or rewritten. Durable request-id, checkpoint,
+  approval-intent and signed-snapshot code was left unchanged.
+
+### Deterministic validation before the live run
+
+The JSON fixtures use different fictional names and layouts, not only the
+Warehouse Delivery Dispute. They cover separate headings/paragraphs, actor versus
+speaker, ambiguous headings, multiple explicit speakers, missing identity,
+repeated names, conflicting nested attribution, scope boundaries, Q/A and
+independent inline accounts. Additional tests cover Unicode, empty model output,
+wrong actor/matter/version/offset proofs, repeated ambiguous quotes, bounded
+windows, zero extraction budget and legacy payload readability.
+
+**19 attribution unit tests passed.** The real-service deterministic integration
+uses the actual authenticated API, SQLite/LangGraph, both reviews, candidate
+selection/search, independent assessment, publication, M9 revision approval, both
+DOCX reads and restart. Its structured reasoning fixture deliberately returns
+UNKNOWN assessments and an **INSUFFICIENT** finding; it does not pretend to prove
+a contradiction. That test passed before the live run. Together: **20 passed,
+0 failed**. Separate relevant extraction/M7–M10/request-id regressions:
+**334 passed, 0 failed (30.81 seconds)**. Counts overlap and must not be summed.
+
+### The single live Ollama attempt
+
+Availability was checked using `/api/tags`. The existing `qwen3:8b` model remained
+installed (digest `500a1f067a9f782620b40bee6f7b0c89e17ae61f686b92c24933e4ca4b2b8b41`).
+Only one generation run was executed in this focused session:
+
+```sh
+python scripts/pilot_smoke.py --live --with-findings
+```
+
+It used the existing isolated synthetic matter/runtime/cache paths and private
+root; the operator token was ephemeral. Settings remained temperature zero,
+16,384 context tokens, 8,192 maximum completion tokens, 90-second request timeout,
+zero retries, three extraction windows, at most one search/pair and two reasoning
+calls. No real matter or client evidence was used.
+
+| Observed stage | Result / evidence |
+| --- | --- |
+| API/auth/isolation | Health 200, anonymous 401, foreign matter read 404 |
+| Upload / source selection | Three READY uploads and three eligible exact version pairs |
+| Investigation start | 201 with durable request identity; evidence checkpoint reached |
+| Coverage | Three COMPLETE text-processing manifests; not a semantic-recall certificate |
+| Verified candidates | 15: two entity mentions, six assertions, three events, four temporal expressions |
+| Quarantine | Zero extraction or independent-verification quarantines |
+| Source attribution | Five supported witness accounts across the two statements; zero rejected attribution proposals |
+| Deterministic contribution | Two verified records carried the distinct deterministic source generator; the output does not break down their kinds |
+| Exact source checks | PASS, including attribution proof spans; no identity merging inferred |
+| Evidence review | TEST-ONLY source-checked decision submitted in the temporary fictional matter |
+| Inconsistency processing | One candidate formed; reasoning reported `MODEL_FAILED` |
+| Workflow result | BLOCKED, `SERVICE_FAILED`, no findings checkpoint; CLI exit 2 |
+| Publication / M9 / DOCX | NOT REACHED in this live attempt; no forced approval or working-artifact export |
+
+Three extraction calls were reported. The blocked envelope did not emit the
+reasoning call total, so an exact overall call count is not claimed; configuration
+bounds it to at most five. The failure code does not distinguish a provider
+transport/timeout problem from malformed structured reasoning output. Its cause
+is **not diagnosed by this focused attribution pass**. No retry or unrelated
+reasoning-workflow change was used to force a pass.
+
+Compared with the preceding live run, supported attribution increased from one
+usable account to five source-scoped accounts across both statements, verified
+events increased from two to three, and quarantine fell from one to zero. This
+is one controlled observation, not an extraction-quality benchmark or proof of
+real-world correctness.
+
+### Exact commands / checks
+
+```sh
+pytest tests/unit/test_source_attribution.py tests/integration/test_source_accounts.py -q --tb=short
+# 20 passed, 0 failed.
+pytest tests/unit/test_investigation_factual_extraction.py tests/unit/test_investigation_extraction_verification.py tests/unit/test_source_attribution.py tests/unit/test_pilot_extraction.py tests/integration/test_source_accounts.py tests/integration/test_pilot_smoke.py tests/api/test_investigation_start_identity.py tests/integration/test_start_request_recovery.py tests/unit/test_investigation_durable.py tests/unit/test_investigation_workflow.py tests/unit/test_deposition.py tests/integration/test_deposition_recovery.py tests/api/test_investigations.py tests/api/test_deposition_api.py tests/api/test_exports.py tests/unit/test_docx_exports.py tests/integration/test_export_integrity.py -q --tb=short
+# 334 passed, 0 failed (30.81 seconds).
+```
+
+Ruff lint, format check and strict mypy passed for these **11 Python files**:
+
+```sh
+set -- src/lextrace/investigations/source_attribution.py src/lextrace/investigations/factual_extraction.py src/lextrace/investigations/extraction_verification.py src/lextrace/investigations/contracts.py src/lextrace/deposition/service.py src/lextrace/research/prompts.py scripts/pilot_smoke.py tests/unit/test_source_attribution.py tests/unit/test_pilot_extraction.py tests/integration/test_pilot_smoke.py tests/integration/test_source_accounts.py
+ruff check "$@"
+ruff format --check "$@"
+mypy "$@"
+git diff --check
+```
+
+No frontend check was rerun because frontend code was not changed. No broad
+full-suite audit or visual/font QA was repeated.
+
+### Remaining risks and readiness
+
+- Source headings and named speech labels establish only what the document
+  attributes, not actual identity, personal knowledge, truth or legal approval.
+- The conservative grammar is intentionally limited; unsupported names/layouts,
+  ambiguous or conflicting speakers remain unresolved. It is not a universal
+  deposition/dialogue parser. Human review and identity gaps remain necessary.
+- Deterministic recovery quotes processed source text only. It does not add missing
+  model dates, normalize predicates, repair invalid quotes or certify completeness.
+- Live M6 reasoning is now the observed blocker. Diagnose `MODEL_FAILED` in a
+  separate bounded pass before claiming live findings, publication, M9 or export
+  acceptance. Earlier/offline passes cannot replace that evidence.
+- Manual browser/deployment acceptance and the broader historical checklist below
+  remain unverified. Pilot readiness remains **FAIL / BLOCKED**.
+
+### Exact focused file manifest (13)
+
+- `docs/product/PILOT_READINESS.md`
+- `scripts/pilot_smoke.py`
+- `src/lextrace/deposition/service.py`
+- `src/lextrace/investigations/contracts.py`
+- `src/lextrace/investigations/extraction_verification.py`
+- `src/lextrace/investigations/factual_extraction.py`
+- `src/lextrace/investigations/source_attribution.py`
+- `src/lextrace/research/prompts.py`
+- `tests/fixtures/investigations/speaker_accounts.json`
+- `tests/integration/test_pilot_smoke.py`
+- `tests/integration/test_source_accounts.py`
+- `tests/unit/test_pilot_extraction.py`
+- `tests/unit/test_source_attribution.py`
+
+## Previous remediation assessments (historical, retained)
+
 ## Remediation continuation — current assessment (2026-11-08)
 
 **FAIL / not pilot-ready.** The unexplained assertion is localized and the

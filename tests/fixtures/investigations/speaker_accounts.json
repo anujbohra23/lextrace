@@ -1,0 +1,144 @@
+[
+  {
+    "id": "headed",
+    "text": "Statement of Priya Shah\n\nI arrived at 08:00. Omar Bell moved the crate.",
+    "quotes": [
+      "I arrived at 08:00. Omar Bell moved the crate."
+    ],
+    "proposed": [
+      null
+    ],
+    "expected": [
+      "Priya Shah"
+    ]
+  },
+  {
+    "id": "actor_is_not_speaker",
+    "text": "Witness statement: Elena Ruiz\n\nSamir Khan unloaded two pallets. I watched from the door.",
+    "quotes": [
+      "Samir Khan unloaded two pallets. I watched from the door."
+    ],
+    "proposed": [
+      "Samir Khan"
+    ],
+    "expected": [
+      "Elena Ruiz"
+    ]
+  },
+  {
+    "id": "ambiguous_heading",
+    "text": "Witnesses: Morgan Vale and Avery Reed\n\nI arrived at noon.",
+    "quotes": [
+      "I arrived at noon."
+    ],
+    "proposed": [
+      "Morgan Vale"
+    ],
+    "expected": [
+      null
+    ]
+  },
+  {
+    "id": "multiple_speakers",
+    "text": "Speaker: Mara Kim\nI saw Ari Cole unload.\n\nSpeaker: Ari Cole\nI arrived later.",
+    "quotes": [
+      "I saw Ari Cole unload.",
+      "I arrived later."
+    ],
+    "proposed": [
+      null,
+      null
+    ],
+    "expected": [
+      "Mara Kim",
+      "Ari Cole"
+    ]
+  },
+  {
+    "id": "missing_identity",
+    "text": "DELIVERY NOTES\n\nAvery Reed moved a box at noon.",
+    "quotes": [
+      "Avery Reed moved a box at noon."
+    ],
+    "proposed": [
+      "Avery Reed"
+    ],
+    "expected": [
+      null
+    ]
+  },
+  {
+    "id": "repeated_names",
+    "text": "Witness statement: Casey Park\nI arrived at noon.\n\nWitness statement: Casey Park\nI arrived at noon.",
+    "quotes": [
+      "I arrived at noon.",
+      "I arrived at noon."
+    ],
+    "proposed": [
+      null,
+      null
+    ],
+    "expected": [
+      "Casey Park",
+      "Casey Park"
+    ]
+  },
+  {
+    "id": "conflicting_prefix",
+    "text": "Statement of Maya Chen\n\nNoah Reed states: I arrived at noon.",
+    "quotes": [
+      "Noah Reed states: I arrived at noon."
+    ],
+    "proposed": [
+      "Noah Reed"
+    ],
+    "expected": [
+      null
+    ]
+  },
+  {
+    "id": "scope_boundary",
+    "text": "Witness statement: Maya Chen\n\nI arrived at noon.\n\nWAREHOUSE LOG\n\nJordan Lee entered at 13:00.",
+    "quotes": [
+      "I arrived at noon.",
+      "Jordan Lee entered at 13:00."
+    ],
+    "proposed": [
+      null,
+      "Jordan Lee"
+    ],
+    "expected": [
+      "Maya Chen",
+      null
+    ]
+  },
+  {
+    "id": "question_answer_unresolved",
+    "text": "Statement of Maya Chen\nQ: Where did Ari arrive?\nA: At noon.",
+    "quotes": [
+      "A: At noon."
+    ],
+    "proposed": [
+      "Maya Chen"
+    ],
+    "expected": [
+      null
+    ]
+  },
+  {
+    "id": "separate_inline_accounts",
+    "text": "Lina Ortiz states: I arrived first.\n\nNoah Reed states: I arrived later.",
+    "quotes": [
+      "Lina Ortiz states: I arrived first.",
+      "Noah Reed states: I arrived later."
+    ],
+    "proposed": [
+      "Noah Reed",
+      "Lina Ortiz"
+    ],
+    "expected": [
+      "Lina Ortiz",
+      "Noah Reed"
+    ]
+  }
+]

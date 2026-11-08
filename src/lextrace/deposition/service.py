@@ -124,6 +124,13 @@ class DepositionService:
                     original = revision.original
                     for ref in original.evidence_references:
                         self.validate_reference(ref, snapshot)
+                    if (
+                        isinstance(original, AttributedAssertion)
+                        and original.attribution_reference
+                    ):
+                        self.validate_reference(
+                            original.attribution_reference, snapshot
+                        )
                     temporal = getattr(
                         original, "stated_time", getattr(original, "temporal", None)
                     )

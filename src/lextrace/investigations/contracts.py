@@ -226,6 +226,9 @@ class AttributedAssertion(ReviewedRecord):
     normalized_proposition: Identifier
     attributed_to: Identifier | None = None
     attribution_status: Literal["known", "unknown", "unresolved"]
+    # Optional for legacy records. New extraction binds the source attribution
+    # separately from substantive quotation(s), including separate heading spans.
+    attribution_reference: EvidenceReference | None = None
     subject: Identifier | None = None
     predicate: Identifier | None = None
     object: Identifier | None = None
@@ -243,6 +246,16 @@ class AttributedAssertion(ReviewedRecord):
             self.subject is None or self.predicate is None or self.object is None
         ):
             raise ValueError("Supply a full subject/predicate/object or text fallback.")
+        if self.attribution_reference is not None:
+            ref = self.attribution_reference
+            if self.attributed_to is None or self.attributed_to not in ref.exact_quote:
+                raise ValueError("Attribution requires its verbatim source label.")
+            if (ref.matter_id, ref.document_id, ref.version_id) != (
+                self.matter_id,
+                self.document_id,
+                self.version_id,
+            ):
+                raise ValueError("Attribution source ownership differs.")
         if self.stated_time is not None:
             _same_extraction(self, self.stated_time)
         return self

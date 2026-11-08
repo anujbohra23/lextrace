@@ -173,6 +173,11 @@ def smoke(root: Path, provider: Any, *, with_findings: bool = False) -> dict[str
                 ]
             }
             result["calls"] = provider.usage.calls
+            result["structured_source_records"] = sum(
+                c.generator == "investigation-source-accounts@1.0.0"
+                for v in artifacts.verified
+                for c in v.valid_candidates
+            )
             records = [c for v in artifacts.verified for c in v.valid_candidates]
             result["last_stage"] = "attribution_review"
             # Proposed attribution is not yet human-reviewed. In this fictional
@@ -198,14 +203,11 @@ def smoke(root: Path, provider: Any, *, with_findings: bool = False) -> dict[str
                 if (
                     expected
                     and c.attributed_to == expected
-                    and any(
-                        expected + " states:" in ref.exact_quote
-                        and "I arrived" in ref.exact_quote
-                        for ref in c.evidence_references
-                    )
+                    and c.attribution_reference is not None
+                    and expected in c.attribution_reference.exact_quote
                 ):
                     accounts.append(c)
-                else:
+                elif c.attributed_to is not None:
                     rejected_attributions.add(c.assertion_id)
             result["rejected_attribution_proposals"] = len(rejected_attributions)
             events = [c for c in records if isinstance(c, InvestigationEvent)]
@@ -223,10 +225,14 @@ def smoke(root: Path, provider: Any, *, with_findings: bool = False) -> dict[str
                     )
             for account in accounts:
                 assert account.attributed_to is not None
+                proof = account.attribution_reference
+                assert proof is not None
                 assert (
-                    account.attributed_to + " states:"
-                    in account.evidence_references[0].exact_quote
+                    texts[proof.document_id][proof.start : proof.end]
+                    == proof.exact_quote
                 )
+                assert account.attributed_to in proof.exact_quote
+            result["source_grounded_witness_accounts"] = len(accounts)
             result["grounded_source_checks"] = "PASS"
             url = base + "/" + thread
             assert client.get(url + "/export.docx").status_code == 409

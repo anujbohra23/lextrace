@@ -29,6 +29,7 @@ from lextrace.investigations.factual_extraction import (
     QuarantinedCandidate,
 )
 from lextrace.investigations.provenance import validate_evidence_reference
+from lextrace.investigations.source_attribution import attribution_for, source_accounts
 from lextrace.matter.contracts import DocumentSection
 
 
@@ -180,6 +181,8 @@ def verify_extraction(
             raise ValueError("Duplicate trusted section identity.")
         section_map[section.section_id] = section
 
+    accounts = source_accounts(version, sections, text)
+
     def check(record: Candidate) -> tuple[Candidate, tuple[str, ...]]:
         issues = _ownership(record, version, run_id)
         if version.coverage == "OCR_REQUIRED":
@@ -202,6 +205,32 @@ def verify_extraction(
                     span=None,
                 )
             issues.extend(validate_evidence_reference(ref, version, section, text))
+        if isinstance(record, AttributedAssertion) and (
+            record.generator == "investigation-factual-extraction@3.0.0"
+            or record.attribution_reference is not None
+        ):
+            resolved = [
+                attribution_for(accounts, ref.start, ref.end)
+                for ref in record.evidence_references
+            ]
+            if record.attributed_to is not None and (
+                any(
+                    a is None
+                    or a.speaker != record.attributed_to
+                    or a.attribution != record.attribution_reference
+                    for a in resolved
+                )
+            ):
+                issues.append("ATTRIBUTION_STRUCTURE_MISMATCH")
+            if record.attribution_reference is not None:
+                ref = record.attribution_reference
+                section = section_map.get(ref.section_id)
+                if section is None:
+                    issues.append("ATTRIBUTION_SECTION_MISSING")
+                else:
+                    issues.extend(
+                        validate_evidence_reference(ref, version, section, text)
+                    )
         if isinstance(record, TemporalReference):
             raw = record.raw_expression
             if raw is not None and not all(

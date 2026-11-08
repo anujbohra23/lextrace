@@ -29,7 +29,7 @@ PromptId = Literal[
 
 class PromptDefinition(Record):
     prompt_id: PromptId
-    version: Literal["1.0.0", "2.0.0"] = "1.0.0"
+    version: Literal["1.0.0", "2.0.0", "3.0.0"] = "1.0.0"
     input_schema: str
     output_schema: str
     description: str

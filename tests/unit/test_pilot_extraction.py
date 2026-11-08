@@ -156,7 +156,7 @@ def test_source_predicate_anchor_reaches_existing_m6_descriptor_field() -> None:
         run_id="test",
         verbatim_anchors=True,
     )
-    assert len(result.candidates) == 1
+    assert len(result.candidates) == 2
     assert result.candidates[0].predicate == "arrived"  # type: ignore[union-attr]
     item["predicate_quote"] = "manufactured"
     invalid = extract_factual_candidates(
@@ -167,5 +167,7 @@ def test_source_predicate_anchor_reaches_existing_m6_descriptor_field() -> None:
         run_id="test",
         verbatim_anchors=True,
     )
-    assert not invalid.candidates
+    assert all(
+        getattr(c, "predicate", None) != "manufactured" for c in invalid.candidates
+    )
     assert invalid.quarantined[0].reason == "UNSOURCED_PREDICATE"
