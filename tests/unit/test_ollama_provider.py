@@ -60,6 +60,26 @@ def test_structured_request_and_usage() -> None:
     assert llm.usage.calls == 1
     assert (llm.usage.input_tokens, llm.usage.output_tokens) == (12, 5)
     assert llm.last_load_ms == 2
+    assert llm.last_request_metrics["context_chars"] == len(
+        json.dumps({"text": "synthetic"}, ensure_ascii=False, sort_keys=True)
+    )
+    assert llm.last_response_metrics["completion_tokens"] == 5
+    assert llm.last_request_duration_ms >= 0
+    llm.close()
+
+
+def test_prompt_token_budget_is_applied_and_request_metrics_are_text_free() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.content)
+        assert payload["options"]["num_predict"] == 512
+        return _response('{"label":"ok"}')
+
+    prompt = PROMPT.model_copy(update={"max_output_tokens": 512})
+    llm = OllamaLLM("qwen3:8b", transport=httpx.MockTransport(handler))
+    assert llm.generate(prompt, Issue, {"text": "synthetic secret text"}).label == "ok"
+    assert llm.last_request_metrics["completion_token_limit"] == 512
+    assert llm.last_request_metrics["approx_prompt_tokens_chars_div_4"] > 0
+    assert "synthetic secret text" not in str(llm.last_request_metrics)
     llm.close()
 
 

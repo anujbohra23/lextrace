@@ -26,6 +26,7 @@ from lextrace.investigations.contracts import (
     InvestigationEvent,
 )
 from lextrace.investigations.evidence_search import EvidenceSearchService
+from lextrace.investigations.findings import CompactHypothesis
 from lextrace.investigations.inconsistency_investigation import (
     InconsistencyInvestigationService,
 )
@@ -535,7 +536,7 @@ class FixtureLLM:
         self, prompt: PromptDefinition, schema: type[Output], context: dict[str, object]
     ) -> Output:
         self.usage.calls += 1
-        if schema.__name__ == "Hypothesis":
+        if issubclass(schema, CompactHypothesis):
             raise ResearchError(
                 "The deterministic extraction fixture has no reasoning output.",
                 category="fixture_output_unavailable",

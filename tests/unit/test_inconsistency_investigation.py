@@ -1,5 +1,6 @@
 """Offline M6B: real private storage/review/search, injectable structured models."""
 
+import json
 from collections.abc import Callable, Iterator
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -26,6 +27,7 @@ from lextrace.investigations.findings import (
     ALL_EXPLANATIONS,
     AccountPremise,
     AlternativeExplanation,
+    CompactHypothesis,
     ContextCheck,
     EvidenceAssessment,
     Hypothesis,
@@ -38,7 +40,7 @@ from lextrace.investigations.inconsistency_candidates import (
 )
 from lextrace.investigations.inconsistency_investigation import (
     InconsistencyInvestigationService,
-    evidence_id,
+    _compact_schema,
 )
 from lextrace.investigations.repository import InvestigationRepository
 from lextrace.investigations.review import target_of
@@ -59,20 +61,22 @@ class Model:
         self.calls = 0
         self.hook: Callable[[], None] = lambda: None
         self.mutate: Callable[[Hypothesis], Hypothesis] = lambda h: h
+        self.compact_mutate: Callable[[dict[str, object]], dict[str, object]] = (
+            lambda value: value
+        )
 
     def generate(
         self, prompt: PromptDefinition, schema: type[Output], context: dict[str, object]
     ) -> Output:
         self.calls += 1
         self.hook()
-        refs = cast(dict[str, dict[str, object]], context["evidence"])
+        refs = cast(list[dict[str, object]], context["evidence"])
         accounts = cast(list[dict[str, object]], context["accounts"])
+        keys = tuple(str(ref["id"]) for ref in refs)
         sides: dict[str, str] = {}
         for side, account in zip(("left", "right"), accounts, strict=True):
-            original = cast(dict[str, object], account["original"])
-            source = cast(list[dict[str, object]], original["evidence_references"])[0]
-            sides[side] = evidence_id(EvidenceReference.model_validate(source))
-        keys = tuple(sorted(refs))
+            indexes = cast(list[int], account["evidence"])
+            sides[side] = keys[indexes[0]]
         hypothesis = Hypothesis(
             status="POTENTIAL_INCONSISTENCY",
             premises=tuple(
@@ -110,7 +114,29 @@ class Model:
                 for k in keys
             ),
         )
-        return schema.model_validate(self.mutate(hypothesis).model_dump(), strict=True)
+        changed = self.mutate(hypothesis)
+        if issubclass(schema, CompactHypothesis):
+            index_by_id = {key: index for index, key in enumerate(keys)}
+            compact_data: dict[str, object] = {
+                "status": changed.status,
+                "premise_entailments": tuple(p.entailment for p in changed.premises),
+                "comparison_assessments": tuple(c.assessment for c in changed.checks),
+                "comparison_evidence": tuple(
+                    tuple(index_by_id.get(key, len(keys)) for key in c.evidence_ids)
+                    for c in changed.checks
+                ),
+                "alternative_assessments": tuple(
+                    a.assessment for a in changed.alternatives
+                ),
+                "alternative_evidence": tuple(
+                    tuple(index_by_id.get(key, len(keys)) for key in a.evidence_ids)
+                    for a in changed.alternatives
+                ),
+                "evidence_roles": tuple(e.role for e in changed.evidence),
+                "evidence_entailments": tuple(e.entailment for e in changed.evidence),
+            }
+            return schema.model_validate(self.compact_mutate(compact_data), strict=True)
+        return schema.model_validate(changed.model_dump(), strict=True)
 
 
 class Search:
@@ -673,6 +699,68 @@ def test_unexpected_programming_errors_are_not_model_failures(runtime: Runtime) 
     runtime.reasoner.hook = bug
     with pytest.raises(RuntimeError, match="programming defect"):
         runtime.run(pair)
+
+
+def test_incomplete_compact_reasoning_is_a_safe_schema_failure(
+    runtime: Runtime,
+) -> None:
+    pair = runtime.pair()
+
+    def incomplete(data: dict[str, object]) -> dict[str, object]:
+        premises = cast(tuple[str, ...], data["premise_entailments"])
+        return data | {"premise_entailments": premises[:-1]}
+
+    runtime.reasoner.compact_mutate = incomplete
+    result = runtime.run(pair)
+    assert not result.findings
+    assert any(
+        d.code == "MODEL_FAILED"
+        and d.stage == "reasoner"
+        and d.reason == "invalid_schema"
+        for d in result.diagnostics
+    )
+
+
+def test_out_of_range_compact_citations_fail_closed(runtime: Runtime) -> None:
+    pair = runtime.pair()
+
+    def invented_index(data: dict[str, object]) -> dict[str, object]:
+        citations = list(cast(tuple[tuple[int, ...], ...], data["comparison_evidence"]))
+        citations[0] = (29,)
+        return data | {"comparison_evidence": tuple(citations)}
+
+    runtime.reasoner.compact_mutate = invented_index
+    result = runtime.run(pair)
+    assert not result.findings
+    assert any(d.code == "INVALID_CITATION" for d in result.diagnostics)
+
+
+def test_compact_schema_requires_exact_fixed_and_evidence_array_lengths() -> None:
+    schema = _compact_schema(10).model_json_schema()
+    properties = cast(dict[str, dict[str, object]], schema["properties"])
+    for field, expected in (
+        ("premise_entailments", 20),
+        ("comparison_assessments", 10),
+        ("comparison_evidence", 10),
+        ("alternative_assessments", 7),
+        ("alternative_evidence", 7),
+        ("evidence_roles", 10),
+        ("evidence_entailments", 10),
+    ):
+        assert properties[field]["minItems"] == expected
+        assert properties[field]["maxItems"] == expected
+    response = {
+        "status": "INSUFFICIENT_EVIDENCE",
+        "premise_entailments": ["UNKNOWN"] * 20,
+        "comparison_assessments": ["UNKNOWN"] * 10,
+        "comparison_evidence": [[] for _ in range(10)],
+        "alternative_assessments": ["UNKNOWN"] * 7,
+        "alternative_evidence": [[] for _ in range(7)],
+        "evidence_roles": ["CONTEXT"] * 9,
+        "evidence_entailments": ["UNKNOWN"] * 10,
+    }
+    with pytest.raises(ValidationError):
+        _compact_schema(10).model_validate_json(json.dumps(response))
 
 
 def test_publication_boundary_rechecks_all_reviews(

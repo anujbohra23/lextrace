@@ -2,6 +2,8 @@
 
 from typing import Literal
 
+from pydantic import Field
+
 from lextrace.retrieval.contracts import Record
 
 PromptId = Literal[
@@ -34,6 +36,7 @@ class PromptDefinition(Record):
     output_schema: str
     description: str
     instructions: str
+    max_output_tokens: int | None = Field(default=None, ge=256, le=8192)
 
     @property
     def identity(self) -> str:

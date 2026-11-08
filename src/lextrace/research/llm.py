@@ -97,8 +97,13 @@ class OpenAICompatibleLLM:
                     "response_format": schema,
                     "temperature": 0,
                 }
-                if getattr(self, "max_completion_tokens", None) is not None:
-                    request["max_completion_tokens"] = self.max_completion_tokens
+                if self.max_completion_tokens is not None:
+                    request["max_completion_tokens"] = min(
+                        self.max_completion_tokens,
+                        prompt.max_output_tokens
+                        if prompt.max_output_tokens is not None
+                        else self.max_completion_tokens,
+                    )
                 response = self._client.chat.completions.parse(**request)
                 parsed = response.choices[0].message.parsed
                 if parsed is None:

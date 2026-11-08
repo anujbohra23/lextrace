@@ -1,6 +1,142 @@
 # M11 pilot readiness — FAIL (acceptance blocked)
 
-## Final inconsistency-reasoning remediation — current assessment
+## M6 Ollama reasoner optimization — latest assessment
+
+**Overall remains FAIL / BLOCKED.** A reasoner-only qwen3:8b call completed in
+26 seconds after reducing M6 request size and response verbosity. The one full
+live smoke then stopped on a structured-response length mismatch before the
+independent verifier. I added request-specific exact-length schema constraints
+for the evidence arrays, but the full live attempt had already been used. That
+final schema change has deterministic coverage only; it has not been live
+validated. Findings review, publication, M9 approval and DOCX exports were not
+reached in the full run.
+
+### Measurements and diagnosis
+
+Local provider: Ollama **0.18.2**; `qwen3:8b`, Q4_K_M, 8.2B parameters. The
+installed model advertises completion/tools/thinking capability. The adapter
+explicitly sets `think: false`, so hidden thinking output is not the leading
+timeout explanation. Application defaults are 8,192 context tokens and 180
+seconds. The live smoke uses 16,384 context tokens, an 8,192-token provider
+completion ceiling, a 180-second request timeout and zero retries. M6 now limits
+its own completion to 2,048 tokens.
+
+Before compaction, a representative M6 request measured 15,114 request-text
+characters (13,784 context characters), a 3,440-character JSON schema and ten
+evidence references. A successful factual-extraction request in the same
+measurement harness was 3,048 request-text characters, 983 context characters
+and a 2,297-character schema. Chars/4 is only a rough token estimate.
+
+The compact M6 request removes repeated nested review records and sends only
+reviewed premise fields plus indexed exact source anchors. The server retains
+the full trusted references and expands response indexes back to exact
+document/version/section/span IDs before independent citation and support
+validation. The model returns ordered arrays rather than repeating verbose
+dimension names, evidence IDs and object keys. For the synthetic reasoner-only
+pair (four references), it measured 3,869 prompt-text characters, 2,658 context
+characters and a 1,863-character schema. The rough prompt estimate was 967
+tokens; Ollama measured 1,632 prompt tokens. Character division understated the
+provider token count.
+
+The earlier timeout cause is **most consistent with the generation cost of the
+verbose M6 input/output contract**, rather than context overflow or thinking:
+the old request exceeded 180 seconds, while the compact reasoner-only call
+completed in 25,939 ms. This is strong evidence, not proof that local runtime
+variability did not contribute.
+
+### Live attempts and stage results
+
+The reasoner-only command bypassed extraction, used temporary storage and
+synthetic reviewed Alice delivery statements, and deliberately skipped the
+verifier. It made exactly one real provider call and persisted no finding:
+
+```sh
+python -m scripts.pilot_reasoner_probe --model qwen3:8b
+```
+
+Result: PASS for the reasoner call and compact response validation. Ollama
+reported 1,632 prompt tokens, 231 completion tokens, normal `stop` termination
+and 25,939 ms duration. The request used four evidence references, a 16,384
+context limit, a 2,048 completion limit and thinking disabled. The probe does
+not show that an independent verifier agrees.
+
+One full live run followed:
+
+```sh
+python scripts/pilot_smoke.py --live --with-findings
+```
+
+| Stage | Result / evidence |
+| --- | --- |
+| Health/auth/isolation | PASS: health 200, anonymous 401, foreign matter read 404 |
+| Upload/selection/start | PASS: three READY documents, three eligible versions, start 201 |
+| Extraction | COMPLETE processing coverage; 14 verified records, four supported source accounts; one assertion quarantined as `UNSOURCED_ASSERTION_STRUCTURE` |
+| Candidate/search | PASS: one candidate pair formed after TEST-ONLY evidence review |
+| Reasoner | BLOCKED: compact response failed a required evidence-array cardinality check (`invalid_schema`); one reasoning call, no verifier call |
+| Findings review/publication/M9/DOCX/restart | NOT REACHED |
+
+The exact mismatching array was not retained; model output and source text were
+not logged. The base compact schema allowed evidence arrays of length 1–30 while
+server expansion required both to match the current evidence count. The response
+passed JSON parsing but failed the server-side length check. The code now makes
+those evidence-array lengths request-specific and fixes the premise/comparison/
+alternative array sizes at 20/10/7. A regression rejects a nine-entry evidence
+array when the request has ten references. This schema change happened after the
+single live full-smoke attempt and has not been exercised with Ollama.
+
+The reasoner-only and full-smoke attempts are the only live generations in this
+pass. No retry, approval bypass, fabricated finding, source-validation change or
+durable start/recovery change was made. The output still must pass the
+independent verifier and existing evidence checks before findings review.
+
+### Regression and quality checks
+
+```sh
+pytest tests/unit/test_ollama_provider.py tests/unit/test_inconsistency_investigation.py tests/unit/test_investigation_workflow.py tests/integration/test_source_accounts.py tests/integration/test_pilot_smoke.py tests/unit/test_investigation_factual_extraction.py tests/unit/test_investigation_extraction_verification.py tests/unit/test_investigation_durable.py tests/integration/test_start_request_recovery.py tests/integration/test_deposition_recovery.py tests/api/test_investigations.py tests/api/test_deposition_api.py tests/api/test_exports.py tests/unit/test_docx_exports.py tests/integration/test_export_integrity.py -q --tb=short
+# 350 passed, 0 failed (30.69 seconds)
+ruff check src/lextrace/investigations/findings.py src/lextrace/investigations/inconsistency_investigation.py src/lextrace/research/prompts.py src/lextrace/research/ollama.py src/lextrace/research/llm.py scripts/pilot_smoke.py scripts/pilot_reasoner_probe.py tests/unit/test_inconsistency_investigation.py tests/unit/test_ollama_provider.py tests/integration/test_source_accounts.py
+# passed
+ruff format --check src/lextrace/investigations/findings.py src/lextrace/investigations/inconsistency_investigation.py src/lextrace/research/prompts.py src/lextrace/research/ollama.py src/lextrace/research/llm.py scripts/pilot_smoke.py scripts/pilot_reasoner_probe.py tests/unit/test_inconsistency_investigation.py tests/unit/test_ollama_provider.py tests/integration/test_source_accounts.py
+# passed
+mypy src/lextrace/investigations/findings.py src/lextrace/investigations/inconsistency_investigation.py src/lextrace/research/prompts.py src/lextrace/research/ollama.py src/lextrace/research/llm.py scripts/pilot_smoke.py scripts/pilot_reasoner_probe.py tests/unit/test_inconsistency_investigation.py tests/unit/test_ollama_provider.py tests/integration/test_source_accounts.py
+# Success: no issues found in 10 source files
+git diff --check
+# passed
+```
+
+Offline regressions cover compact-response expansion, exact evidence-index
+mapping, fixed and request-specific array lengths, incomplete/malformed outputs,
+invalid indexes, safe diagnostics and provider token-budget/telemetry behavior.
+No frontend or browser checks were run; no frontend or DOCX renderer changed.
+
+### Remaining pilot blockers
+
+- The request-specific evidence-array schema has not been exercised live.
+- The full live run did not reach independent verification, findings review,
+  signed publication, M9 approval, either DOCX export or restart read-back.
+- One extracted assertion remained quarantined. COMPLETE processing coverage is
+  not semantic completeness or extraction-quality certification.
+- Manual browser and deployment validation remain outstanding.
+
+Pilot readiness remains **FAIL / BLOCKED**. Do not treat the reasoner-only
+response as an independently verified finding or professional approval. No
+commit or push was made.
+
+### Files changed in this remediation
+
+- `docs/product/PILOT_READINESS.md`
+- `scripts/pilot_smoke.py`
+- `scripts/pilot_reasoner_probe.py` (new bounded reasoner-only harness)
+- `src/lextrace/investigations/findings.py`
+- `src/lextrace/investigations/inconsistency_investigation.py`
+- `src/lextrace/research/llm.py`
+- `src/lextrace/research/ollama.py`
+- `src/lextrace/research/prompts.py`
+- `tests/integration/test_source_accounts.py`
+- `tests/unit/test_inconsistency_investigation.py`
+- `tests/unit/test_ollama_provider.py`
+
+## Previous reasoner-timeout remediation — superseded by latest assessment
 
 **Overall: FAIL / blocked.** The single bounded live run reached M6 inconsistency
 reasoning, then stopped before findings review. No publication, M9 approval or

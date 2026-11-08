@@ -2,13 +2,10 @@
 
 import json
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TypeVar, cast
 
 from pydantic import BaseModel
 
-from lextrace.investigations.contracts import EvidenceReference
-from lextrace.investigations.findings import ALL_DIMENSIONS, ALL_EXPLANATIONS
-from lextrace.investigations.inconsistency_investigation import evidence_id
 from lextrace.research.prompts import PromptDefinition
 from scripts.pilot_smoke import FixtureLLM, smoke
 
@@ -24,39 +21,19 @@ class UnknownReasoningFixture(FixtureLLM):
         if "text" in context:
             return super().generate(prompt, schema, context)
         self.usage.calls += 1
-        accounts: Any = context["accounts"]
-        evidence: Any = context["evidence"]
-        premises = []
-        for side, account in zip(("left", "right"), accounts, strict=True):
-            reference = EvidenceReference.model_validate_json(
-                json.dumps(account["original"]["evidence_references"][0])
-            )
-            for dimension in ALL_DIMENSIONS:
-                premises.append(
-                    dict(
-                        side=side,
-                        dimension=dimension,
-                        entailment="UNKNOWN",
-                        evidence_ids=[evidence_id(reference)],
-                    )
-                )
         return schema.model_validate_json(
             json.dumps(
                 dict(
                     status="INSUFFICIENT_EVIDENCE",
-                    premises=premises,
-                    checks=[
-                        dict(dimension=d, assessment="UNKNOWN", evidence_ids=[])
-                        for d in ALL_DIMENSIONS
-                    ],
-                    alternatives=[
-                        dict(explanation=e, assessment="UNKNOWN", evidence_ids=[])
-                        for e in ALL_EXPLANATIONS
-                    ],
-                    evidence=[
-                        dict(evidence_id=k, role="CONTEXT", entailment="UNKNOWN")
-                        for k in evidence
-                    ],
+                    premise_entailments=["UNKNOWN"] * 20,
+                    comparison_assessments=["UNKNOWN"] * 10,
+                    comparison_evidence=[[] for _ in range(10)],
+                    alternative_assessments=["UNKNOWN"] * 7,
+                    alternative_evidence=[[] for _ in range(7)],
+                    evidence_roles=["CONTEXT"]
+                    * len(cast(list[object], context["evidence"])),
+                    evidence_entailments=["UNKNOWN"]
+                    * len(cast(list[object], context["evidence"])),
                 )
             )
         )

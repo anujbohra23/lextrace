@@ -94,6 +94,55 @@ class Hypothesis(ReviewContract):
     interpretation: Literal["UNVERIFIED_HYPOTHESIS"] = "UNVERIFIED_HYPOTHESIS"
 
 
+CompactEntailment = Literal["SUPPORTED", "UNSUPPORTED", "UNKNOWN"]
+CompactComparison = Literal["COMPARABLE", "DIFFERENT", "UNKNOWN"]
+CompactAlternative = Literal["POSSIBLE", "SUPPORTED", "NOT_SUPPORTED", "UNKNOWN"]
+CompactEvidenceRole = Literal["SUPPORTING", "CONTRARY", "CONTEXT"]
+
+
+class CompactHypothesis(ReviewContract):
+    """Token-efficient model response; expanded and validated before persistence."""
+
+    status: Status
+    premise_entailments: Annotated[
+        tuple[CompactEntailment, ...], Field(min_length=20, max_length=20)
+    ]
+    comparison_assessments: Annotated[
+        tuple[CompactComparison, ...], Field(min_length=10, max_length=10)
+    ]
+    comparison_evidence: Annotated[
+        tuple[
+            Annotated[
+                tuple[Annotated[int, Field(ge=0, le=29)], ...],
+                Field(max_length=30),
+            ],
+            ...,
+        ],
+        Field(min_length=10, max_length=10),
+    ]
+    alternative_assessments: Annotated[
+        tuple[CompactAlternative, ...], Field(min_length=7, max_length=7)
+    ]
+    alternative_evidence: Annotated[
+        tuple[
+            Annotated[
+                tuple[Annotated[int, Field(ge=0, le=29)], ...],
+                Field(max_length=30),
+            ],
+            ...,
+        ],
+        Field(min_length=7, max_length=7),
+    ]
+    evidence_roles: Annotated[
+        tuple[CompactEvidenceRole, ...],
+        Field(min_length=1, max_length=30),
+    ]
+    evidence_entailments: Annotated[
+        tuple[CompactEntailment, ...],
+        Field(min_length=1, max_length=30),
+    ]
+
+
 class SourceAccount(ReviewContract):
     reference: EvidenceReference
     basis: Literal["SOURCE_ATTRIBUTED_QUOTE"] = "SOURCE_ATTRIBUTED_QUOTE"
