@@ -28,6 +28,7 @@ from pydantic import Field
 from starlette.concurrency import run_in_threadpool
 
 from lextrace.api.auth import authenticate_operator
+from lextrace.api.investigations import investigation_router
 from lextrace.config import (
     APP_TITLE,
     AppSettings,
@@ -49,6 +50,15 @@ from lextrace.graph.intelligence_contracts import (
     TreatmentAnnotation,
 )
 from lextrace.graph.store import CitationGraph
+from lextrace.investigations.evidence_search import EvidenceSearchService
+from lextrace.investigations.inconsistency_investigation import (
+    InconsistencyInvestigationService,
+)
+from lextrace.investigations.repository import InvestigationRepository
+from lextrace.investigations.workflow import (
+    InvestigationServices,
+    InvestigationWorkflow,
+)
 from lextrace.matter.analysis import MatterAnalyzer
 from lextrace.matter.contracts import ArgumentFinding, LegalClaim, Matter, MatterError
 from lextrace.matter.deep_research import (
@@ -178,6 +188,7 @@ def create_app(
     graph_path: Path | None = None,
     research_jobs: ResearchJobs | None = None,
     settings: AppSettings | None = None,
+    investigation_workflow: InvestigationWorkflow | None = None,
 ) -> FastAPI:
     configured = settings or AppSettings.from_environment()
     lock = threading.RLock()
@@ -190,6 +201,47 @@ def create_app(
     matter_slots = threading.BoundedSemaphore(3)
     monitoring_executor = ThreadPoolExecutor(max_workers=1)
     monitoring_slots = threading.BoundedSemaphore(1)
+
+    investigations = investigation_workflow
+    investigation_repository: InvestigationRepository | None = None
+
+    def get_investigations() -> InvestigationWorkflow:
+        nonlocal investigations, investigation_repository
+        with lock:
+            if investigations is None:
+                if not configured.llm_model:
+                    raise HTTPException(503, "INVESTIGATION_UNAVAILABLE")
+                store = get_matter_store()
+                provider = configured_llm(
+                    configured.llm_model,
+                    provider=configured.llm_provider,
+                    openai_base_url=configured.llm_base_url,
+                    ollama_base_url=configured.ollama_base_url,
+                    timeout=configured.llm_timeout,
+                )
+                repo = InvestigationRepository(configured.matter_db, source_store=store)
+                try:
+                    investigations = InvestigationWorkflow.open(
+                        InvestigationServices(
+                            store,
+                            repo,
+                            provider,
+                            InconsistencyInvestigationService(
+                                store,
+                                repo,
+                                EvidenceSearchService(store, repo),
+                                provider,
+                                provider,
+                            ),
+                        )
+                    )
+                except BaseException:
+                    repo.close()
+                    raise
+                investigation_repository = repo
+            if investigations.runtime is None:
+                raise HTTPException(503, "INVESTIGATION_DURABILITY_REQUIRED")
+            return investigations
 
     def get_matter_store() -> MatterStore:
         nonlocal matter_store
@@ -370,10 +422,17 @@ def create_app(
             engine.close()
         matter_executor.shutdown(wait=True)
         monitoring_executor.shutdown(wait=True)
+        if investigations is not None and investigations is not investigation_workflow:
+            investigations.close()
+        if investigation_repository is not None:
+            investigation_repository.close()
         if matter_store is not None:
             matter_store.close()
 
     application = FastAPI(title=APP_TITLE, lifespan=lifespan)
+    application.include_router(
+        investigation_router(get_matter_store, get_investigations)
+    )
     application.add_middleware(
         CORSMiddleware,
         allow_origins=configured.cors_origins,

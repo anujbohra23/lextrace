@@ -244,8 +244,9 @@ class DurableRuntime:
         )
 
     def load(
-        self, thread: str, node: str | None = None
+        self, thread: str, node: str | None = None, *, digest: str | None = None
     ) -> tuple["InvestigationArtifacts", dict[str, object] | None]:
+        """Load a hash-verified journal entry, optionally pinned to a signed digest."""
         query = (
             "SELECT digest,payload,result,node FROM investigation_artifacts "
             "WHERE thread_id=?"
@@ -254,6 +255,9 @@ class DurableRuntime:
         if node is not None:
             query += " AND node=?"
             args += (node,)
+        if digest is not None:
+            query += " AND digest=?"
+            args += (digest,)
         query += " ORDER BY rowid DESC LIMIT 1"
         rows = self.read(query, args)
         row = rows[0] if rows else None

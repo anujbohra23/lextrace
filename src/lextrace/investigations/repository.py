@@ -37,6 +37,18 @@ class InvestigationRepository(ReviewStorage):
             self._db.close()
             raise
 
+    def list_threads(self, matter_id: str) -> tuple[str, ...]:
+        """List durable run identities scoped to a matter, in creation order."""
+        with self._lock:
+            return tuple(
+                row[0]
+                for row in self._db.execute(
+                    "SELECT thread_id FROM investigation_runs WHERE matter_id=? "
+                    "ORDER BY rowid",
+                    (matter_id,),
+                ).fetchall()
+            )
+
     def close(self) -> None:
         with self._lock:
             self._db.close()

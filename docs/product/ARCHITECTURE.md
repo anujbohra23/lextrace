@@ -417,3 +417,8 @@ except health/static docs, binds the pilot workspace to one persisted operator,
 and supplies server-derived reviewer identity. M7 human command identity alone
 remains insufficient authentication; HTTP callers must pass this boundary and
 the trusted thread/matter guard before M8 exposes durable workflow operations.
+
+M8A exposes the durable investigation workflow through authenticated, matter-scoped
+FastAPI adapters. See [Investigation API contracts](INVESTIGATION_API.md) for routes,
+review decisions, snapshot/artifact reads, and recovery behavior. M7 remains the
+sole owner of transitions, approval intents, checkpoints, and publication.
