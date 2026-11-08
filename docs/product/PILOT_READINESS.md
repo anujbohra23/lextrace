@@ -1,15 +1,83 @@
-# M11 pilot readiness — FAIL (acceptance blocked)
+# M11 pilot readiness — synthetic functional smoke PASS; production readiness BLOCKED
 
-## M6 Ollama reasoner optimization — latest assessment
+## Latest full synthetic live smoke — functional pass, finding insufficient
 
-**Overall remains FAIL / BLOCKED.** A reasoner-only qwen3:8b call completed in
-26 seconds after reducing M6 request size and response verbosity. The one full
-live smoke then stopped on a structured-response length mismatch before the
-independent verifier. I added request-specific exact-length schema constraints
-for the evidence arrays, but the full live attempt had already been used. That
-final schema change has deterministic coverage only; it has not been live
-validated. Findings review, publication, M9 approval and DOCX exports were not
-reached in the full run.
+**Assessment: the full synthetic end-to-end functional smoke passed. The
+potential inconsistency was not independently supported. LexTrace is not
+production-ready.** This latest run supersedes the earlier M6 reasoner timeout
+and compact-response cardinality failure as the current live result. Those prior
+failures remain documented below as historical defect evidence.
+
+Command:
+
+```sh
+python scripts/pilot_smoke.py --live --with-findings
+```
+
+Provider/model: local Ollama `qwen3:8b`. The run used the isolated fictional
+Warehouse Delivery Dispute matter and TEST-ONLY reviewer decisions. No real
+matter received an approval.
+
+| Stage | Result / evidence |
+| --- | --- |
+| Health/auth/isolation | PASS: health 200, anonymous 401, foreign matter read 404 |
+| Upload/eligible versions/start | PASS: three READY uploads, three eligible versions, investigation start succeeded |
+| Coverage/extraction | All three source-processing coverages COMPLETE; verified record counts 7, 4, 3 |
+| Quarantine | Extraction quarantine 0, 1, 0; the one reason was `UNSOURCED_ASSERTION_STRUCTURE`. Independent verification quarantine 0, 0, 0 |
+| Verified record kinds | 2 `EntityMention`, 5 `AttributedAssertion`, 3 `InvestigationEvent`, 4 `TemporalReference` |
+| Source grounding | PASS: four source-grounded witness accounts and exact grounded-source checks |
+| Candidate/search | PASS: one candidate pair; one search |
+| M6 reasoning | Two calls completed, no provider/schema failure. Diagnostic: `INSUFFICIENT_SUPPORT` |
+| Evidence review retry | PASS |
+| Findings review | PASS: one finding reached review; `finding_verification` was `INSUFFICIENT` |
+| Chronology | PASS: one dated chronology group |
+| Deposition preparation | PASS: eight questions; review retry conflict behaved as expected |
+| DOCX | PASS: authenticated export read-back succeeded |
+| Restart/recovery | PASS: server-side state was recovered |
+| Overall smoke | PASS: remaining stages reported PASS with TEST-ONLY approvals |
+
+The finding remains a **potential inconsistency candidate with insufficient
+independent support**. It must not be described as a verified inconsistency,
+proven contradiction, or evidence of dishonesty. The successful run shows that
+the synthetic workflow can traverse both review gates, publication, deposition
+preparation, exports and restart recovery. It does not certify the accuracy or
+recall of extraction or reasoning on real-world records. `COMPLETE` coverage
+describes processing coverage, not semantic completeness; one assertion was
+quarantined and the finding itself remained insufficient.
+
+The reasoner-only timing and the earlier timeout/cardinality runs remain
+historical observations. The latest run establishes that a subsequent full
+synthetic pass completed, while preserving the earlier failures as regression
+history rather than rewriting them as successes.
+
+### Remaining pilot acceptance steps
+
+- Manually validate the browser workflow: upload and version selection, evidence
+  and findings review, deposition edits/approval, stale-state refresh, and both
+  authenticated downloads.
+- Exercise backup and restore, deployment configuration, operator setup and
+  recovery procedures in the intended pilot environment.
+- Conduct a separately governed real-world accuracy evaluation with authorized
+  representative material and qualified human review. Measure extraction
+  recall, attribution errors, unsupported inference rates, and reviewer
+  usability. Do not reuse the synthetic TEST-ONLY decisions as professional
+  approvals.
+- Keep the quarantined assertion and `INSUFFICIENT_SUPPORT` result visible in
+  pilot reporting; neither is a successful accuracy result.
+
+Overall readiness remains **BLOCKED / not production-ready** until these manual
+and accuracy steps are completed. This documentation update did not rerun the
+provider, tests, or production workflow. No commit or push was made.
+
+## M6 Ollama reasoner compaction/cardinality failure — historical
+
+At the time of this prior assessment, readiness remained FAIL / BLOCKED. A
+reasoner-only qwen3:8b call completed in 26 seconds after reducing M6 request
+size and response verbosity. The full live smoke reported in this section then
+stopped on a structured-response length mismatch before the independent
+verifier. Request-specific exact-length schema constraints were added after
+that full run. See the latest section above for the subsequent successful
+full synthetic smoke using the updated schema.
 
 ### Measurements and diagnosis
 
@@ -81,8 +149,9 @@ server expansion required both to match the current evidence count. The response
 passed JSON parsing but failed the server-side length check. The code now makes
 those evidence-array lengths request-specific and fixes the premise/comparison/
 alternative array sizes at 20/10/7. A regression rejects a nine-entry evidence
-array when the request has ten references. This schema change happened after the
-single live full-smoke attempt and has not been exercised with Ollama.
+array when the request has ten references. At the time of this historical report,
+this schema change had not yet been exercised with Ollama; the newer run above
+subsequently exercised it.
 
 The reasoner-only and full-smoke attempts are the only live generations in this
 pass. No retry, approval bypass, fabricated finding, source-validation change or
@@ -111,7 +180,8 @@ No frontend or browser checks were run; no frontend or DOCX renderer changed.
 
 ### Remaining pilot blockers
 
-- The request-specific evidence-array schema has not been exercised live.
+- At the time of this historical assessment, the request-specific evidence-array
+  schema had not yet been exercised live; see the later successful run above.
 - The full live run did not reach independent verification, findings review,
   signed publication, M9 approval, either DOCX export or restart read-back.
 - One extracted assertion remained quarantined. COMPLETE processing coverage is
