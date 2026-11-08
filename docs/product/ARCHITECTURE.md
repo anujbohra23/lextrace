@@ -436,3 +436,9 @@ replays, and source/run/snapshot deletion cascades. No graph/checkpointer is add
 and no M7 snapshot is changed. See [M9 contracts](DEPOSITION_API.md) for the review
 state machine, limitations, authenticated routes, and frontend recovery semantics.
 M10 DOCX export and M11 extraction/pilot hardening remain separate.
+
+## M10 authenticated Word exports
+
+See [DOCX_EXPORTS.md](DOCX_EXPORTS.md) for investigation and approved deposition
+export routes, trust checks, revision selection, resource limits and UI behavior.
+Exports preserve M7/M9 approval boundaries and do not resume workflows.

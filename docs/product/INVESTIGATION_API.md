@@ -163,3 +163,9 @@ workspace. The authenticated deposition endpoints consume the exact signed M7
 artifact revision and do not modify investigation approval or publication.
 See [M9 deposition contracts](DEPOSITION_API.md) for create/read/review/history and
 approved-plan routes, evidence constraints, partial/blocked outcomes and recovery.
+
+## M10 authenticated Word exports
+
+See [DOCX_EXPORTS.md](DOCX_EXPORTS.md) for investigation and approved deposition
+export routes, trust checks, revision selection, resource limits and UI behavior.
+Exports preserve M7/M9 approval boundaries and do not resume workflows.

@@ -230,3 +230,9 @@ still requires semantic judgment by the approver; exact source provenance is not
 a truth certificate. Account-scoped dossiers deliberately retain unresolved
 speaker identity rather than guessing a merge. No DOCX export, M11 audit, commit
 or push is included in this delivery.
+
+## M10 authenticated Word exports
+
+See [DOCX_EXPORTS.md](DOCX_EXPORTS.md) for investigation and approved deposition
+export routes, trust checks, revision selection, resource limits and UI behavior.
+Exports preserve M7/M9 approval boundaries and do not resume workflows.
