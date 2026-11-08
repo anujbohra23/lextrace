@@ -514,3 +514,150 @@ def test_workflow_failures_are_not_client_validation(
     assert response.status_code == (409 if error == "validation" else 503)
     assert response.json()["detail"] != "INVESTIGATION_INVALID_REQUEST"
     assert "private" not in response.text
+
+
+def test_eligible_versions_can_start(client: TestClient, durable: Harness) -> None:
+    response = client.get(base(durable) + "/eligible-versions")
+    assert response.status_code == 200, response.text
+    versions = response.json()
+    expected = sorted(
+        (v.model_dump(mode="json") for v in durable.runtime.approved),
+        key=lambda v: v["document_id"],
+    )
+    assert versions == expected
+    assert all(set(v) == {"document_id", "version_id"} for v in versions)
+    assert response.headers["cache-control"] == "no-store"
+    started = client.post(base(durable), json={"approved_versions": versions})
+    assert started.status_code == 201, started.text
+    assert started.json()["checkpoint"] == "evidence"
+
+
+@pytest.mark.parametrize("matter_id", ["missing", "0" * 32])
+def test_eligible_versions_missing_matter(client: TestClient, matter_id: str) -> None:
+    response = client.get(f"/matters/{matter_id}/investigations/eligible-versions")
+    assert response.status_code == 404
+    assert response.json() == {"detail": "INVESTIGATION_NOT_FOUND"}
+
+
+def test_eligible_versions_empty_matter(client: TestClient, durable: Harness) -> None:
+    empty = durable.runtime.store.create_matter("Empty")
+    response = client.get(
+        f"/matters/{empty.matter_id}/investigations/eligible-versions"
+    )
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_eligibility_uses_readiness_and_active_manifests(
+    client: TestClient, durable: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from lextrace.matter.documents import ExtractedDocument
+
+    store = durable.runtime.store
+    repo = durable.runtime.repo
+    matter_id = durable.runtime.matter
+    ready = store.add_document(matter_id, "ready.txt", b"Ready source")
+    partial = repo.active_document_version(matter_id, ready.document_id)
+    assert partial is not None
+    repo.create_document_version(
+        partial.model_copy(
+            update={
+                "version_id": "partial-active",
+                "coverage": "PARTIAL",
+            }
+        )
+    )
+    legacy = store.add_document(matter_id, "legacy.txt", b"Missing manifest")
+    deleted = store.add_document(matter_id, "deleted.txt", b"Deleted source")
+    store.delete_document(matter_id, deleted.document_id)
+    foreign_matter = store.create_matter("Foreign")
+    foreign = store.add_document(
+        foreign_matter.matter_id, "foreign.txt", b"Foreign source"
+    )
+    with repo._db:
+        repo._db.execute(
+            "DELETE FROM investigation_document_versions WHERE document_id=?",
+            (legacy.document_id,),
+        )
+    with monkeypatch.context() as patch:
+        patch.setattr(
+            "lextrace.matter.store.extract_document",
+            lambda *_: ExtractedDocument(
+                "",
+                (0,),
+                1,
+                ocr_required=True,
+            ),
+        )
+        ocr = store.add_document(matter_id, "scan.pdf", b"Synthetic scanned file")
+    assert ocr.ingestion_status == "OCR_REQUIRED"
+    response = client.get(base(durable) + "/eligible-versions")
+    assert response.status_code == 200, response.text
+    pairs = response.json()
+    assert {"document_id": ready.document_id, "version_id": "partial-active"} in pairs
+    for excluded in (legacy, deleted, foreign, ocr):
+        assert not any(v["document_id"] == excluded.document_id for v in pairs)
+    # Listing never repairs legacy manifests or infers a human approval flag.
+    assert repo.list_document_versions(matter_id, legacy.document_id) == []
+
+
+@pytest.mark.parametrize("invalid", ["retired", "unknown", "foreign"])
+def test_start_revalidates_listed_versions(
+    client: TestClient, durable: Harness, invalid: str
+) -> None:
+    listed = client.get(base(durable) + "/eligible-versions").json()
+    selected = listed[0]
+    repo = durable.runtime.repo
+    current = repo.active_document_version(
+        durable.runtime.matter, selected["document_id"]
+    )
+    assert current is not None
+    if invalid == "retired":
+        repo.create_document_version(
+            current.model_copy(update={"version_id": "replacement"})
+        )
+        refreshed = client.get(base(durable) + "/eligible-versions").json()
+        assert selected not in refreshed
+        assert {
+            "document_id": selected["document_id"],
+            "version_id": "replacement",
+        } in refreshed
+    elif invalid == "unknown":
+        selected = {**selected, "version_id": "unknown"}
+    else:
+        foreign = durable.runtime.store.create_matter("Other matter")
+        doc = durable.runtime.store.add_document(
+            foreign.matter_id, "foreign.txt", b"Foreign"
+        )
+        version = repo.active_document_version(foreign.matter_id, doc.document_id)
+        assert version is not None
+        selected = {"document_id": doc.document_id, "version_id": version.version_id}
+    response = client.post(base(durable), json={"approved_versions": [selected]})
+    assert response.status_code == 409
+    assert response.json() == {"detail": "INVESTIGATION_STATE_CONFLICT"}
+    assert repo.list_threads(durable.runtime.matter) == ()
+
+
+def test_eligible_versions_without_workflow_or_model(
+    client: TestClient, durable: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("LEXTRACE_LLM_MODEL", raising=False)
+    with TestClient(create_app()) as fresh:
+        fresh.headers.update(client.headers)
+        response = fresh.get(base(durable) + "/eligible-versions")
+        assert response.status_code == 200, response.text
+        assert response.json()
+        # Merely listing sources must not create workflow checkpoints or runs.
+        assert durable.runtime.repo.list_threads(durable.runtime.matter) == ()
+
+
+@pytest.mark.parametrize("credential", [None, "wrong-credential"])
+def test_eligible_versions_require_auth(
+    client: TestClient, durable: Harness, credential: str | None
+) -> None:
+    client.headers.pop("authorization")
+    if credential:
+        client.headers["authorization"] = f"Bearer {credential}"
+    response = client.get(base(durable) + "/eligible-versions")
+    assert response.status_code == 401
+    assert "document_id" not in response.text

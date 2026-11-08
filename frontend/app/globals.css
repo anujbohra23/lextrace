@@ -21,3 +21,12 @@
 .doctrine-timeline button { border: 0; background: transparent; text-align: left; cursor: pointer; }
 .doctrine-timeline span { display: block; }
 @media (max-width: 760px) { .trace-columns { grid-template-columns: 1fr; } }
+
+.investigation-workspace { overflow-wrap: anywhere; }
+.investigation-review { margin-top: 24px; }
+.investigation-review fieldset { border: 1px solid var(--line); padding: 16px; min-width: 0; }
+.investigation-check { display: flex; align-items: center; gap: 10px; margin: 12px 0; }
+.investigation-check input { flex: 0 0 auto; }
+.investigation-data { font-size: 14px; }
+.investigation-data dt { color: var(--muted); text-transform: capitalize; }
+.investigation-data dd { margin: 0 0 12px 16px; white-space: pre-wrap; }

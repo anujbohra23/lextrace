@@ -49,12 +49,19 @@ export type ResearchResult = {
   trace: { status: string; provider: string; model: string; total_seconds: number; usage: { calls: number; input_tokens: number; output_tokens: number } };
 };
 
+export class ApiError extends Error {
+  constructor(public readonly status: number) {
+    super("LexTrace request failed.");
+    this.name = "ApiError";
+  }
+}
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(API_URL + path, {
     ...init,
     headers: { "content-type": "application/json", ...init?.headers, ...operatorHeaders() },
     cache: "no-store",
   });
-  if (!response.ok) throw new Error("LexTrace request failed.");
+  if (!response.ok) throw new ApiError(response.status);
   return response.json() as Promise<T>;
 }

@@ -39,3 +39,16 @@ describe("pilot bearer credential", () => {
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:local-download");
   });
 });
+
+it("preserves HTTP status for investigation feedback without echoing server error data", async () => {
+  const { ApiError } = await import("./api");
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 409 }));
+  try { await api("/matters/matter/investigations/thread"); }
+  catch (failure) {
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as InstanceType<typeof ApiError>).status).toBe(409);
+    expect((failure as Error).message).toBe("LexTrace request failed.");
+    return;
+  }
+  throw new Error("Expected the request to fail");
+});

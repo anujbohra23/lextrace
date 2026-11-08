@@ -21,6 +21,7 @@ from pydantic import (
 from lextrace.api.auth import OperatorPrincipal, require_operator
 from lextrace.investigations.chronology import Chronology
 from lextrace.investigations.evidence_search import ApprovedVersion
+from lextrace.investigations.repository import InvestigationRepository
 from lextrace.investigations.review import DateCorrection, ReviewDecision, ReviewTarget
 from lextrace.investigations.reviewed_chronology import ReviewedChronology
 from lextrace.investigations.workflow import (
@@ -130,7 +131,9 @@ class InvestigationView(RequestModel):
 
 
 def investigation_router(
-    store: Callable[[], MatterStore], workflow: Callable[[], InvestigationWorkflow]
+    store: Callable[[], MatterStore],
+    workflow: Callable[[], InvestigationWorkflow],
+    repository: Callable[[], InvestigationRepository],
 ) -> APIRouter:
     router = APIRouter(
         prefix="/matters/{matter_id}/investigations", route_class=InvestigationRoute
@@ -220,6 +223,26 @@ def investigation_router(
             read(matter_id, thread)
             for thread in w.services.repository.list_threads(matter_id)
         ]
+
+    @router.get("/eligible-versions")
+    def eligible_versions(matter_id: str) -> list[ApprovedVersion]:
+        """Selectable active READY sources; not a persisted human approval state."""
+        matter(matter_id)
+        repo = repository()
+        result = []
+        for document in sorted(
+            store().list_documents(matter_id), key=lambda item: item.document_id
+        ):
+            if document.ingestion_status != "READY":
+                continue
+            version = repo.active_document_version(matter_id, document.document_id)
+            if version is not None:
+                result.append(
+                    ApprovedVersion(
+                        document_id=document.document_id, version_id=version.version_id
+                    )
+                )
+        return result
 
     @router.get("/{thread_id}")
     def read(matter_id: str, thread_id: str) -> InvestigationView:

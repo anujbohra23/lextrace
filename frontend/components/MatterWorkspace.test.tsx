@@ -49,6 +49,7 @@ it("shows X-Ray evidence and highlights the exact source span", async () => {
   }));
   render(<MatterWorkspace matterId={matterId} />);
   await waitFor(() => expect(screen.getByText("Test matter")).toBeInTheDocument());
+  expect(screen.getByRole("link", { name: "Investigations →" })).toHaveAttribute("href", `/matters/${matterId}/investigations`);
   fireEvent.click(screen.getByRole("tab", { name: "Argument X-Ray" }));
   fireEvent.click(screen.getByRole("button", { name: "A legal proposition appears here." }));
   await waitFor(() => expect(screen.getByText("The exact precedent passage.")).toBeInTheDocument());

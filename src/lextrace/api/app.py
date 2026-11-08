@@ -205,8 +205,19 @@ def create_app(
     investigations = investigation_workflow
     investigation_repository: InvestigationRepository | None = None
 
+    def get_investigation_repository() -> InvestigationRepository:
+        nonlocal investigation_repository
+        with lock:
+            if investigations is not None:
+                return investigations.services.repository
+            if investigation_repository is None:
+                investigation_repository = InvestigationRepository(
+                    configured.matter_db, source_store=get_matter_store()
+                )
+            return investigation_repository
+
     def get_investigations() -> InvestigationWorkflow:
-        nonlocal investigations, investigation_repository
+        nonlocal investigations
         with lock:
             if investigations is None:
                 if not configured.llm_model:
@@ -219,26 +230,21 @@ def create_app(
                     ollama_base_url=configured.ollama_base_url,
                     timeout=configured.llm_timeout,
                 )
-                repo = InvestigationRepository(configured.matter_db, source_store=store)
-                try:
-                    investigations = InvestigationWorkflow.open(
-                        InvestigationServices(
+                repo = get_investigation_repository()
+                investigations = InvestigationWorkflow.open(
+                    InvestigationServices(
+                        store,
+                        repo,
+                        provider,
+                        InconsistencyInvestigationService(
                             store,
                             repo,
+                            EvidenceSearchService(store, repo),
                             provider,
-                            InconsistencyInvestigationService(
-                                store,
-                                repo,
-                                EvidenceSearchService(store, repo),
-                                provider,
-                                provider,
-                            ),
-                        )
+                            provider,
+                        ),
                     )
-                except BaseException:
-                    repo.close()
-                    raise
-                investigation_repository = repo
+                )
             if investigations.runtime is None:
                 raise HTTPException(503, "INVESTIGATION_DURABILITY_REQUIRED")
             return investigations
@@ -431,7 +437,9 @@ def create_app(
 
     application = FastAPI(title=APP_TITLE, lifespan=lifespan)
     application.include_router(
-        investigation_router(get_matter_store, get_investigations)
+        investigation_router(
+            get_matter_store, get_investigations, get_investigation_repository
+        )
     )
     application.add_middleware(
         CORSMiddleware,

@@ -12,6 +12,7 @@ Base path: `/matters/{matter_id}/investigations`.
 | --- | --- | --- |
 | POST | empty | Start a durable investigation; 201 investigation view. |
 | GET | empty | List matter investigations in durable creation order; 200 array of views. |
+| GET | `/eligible-versions` | List eligible active document/version pairs for source selection; 200 array. |
 | GET | `/{thread_id}` | Reconcile authorized work and read current status/review; 200 view. |
 | POST | `/{thread_id}/decisions` | Submit evidence/findings review decision; 200 current view. |
 | GET | `/{thread_id}/snapshots/{snapshot_id}` | Read current M7 immutable signed snapshot by exact ID. |
@@ -24,7 +25,34 @@ is no separate resume endpoint: decisions use M7 `resume`, while reads use M7
 These synchronous operations return after reaching a review gate or terminal
 state. Retrying a start creates a new investigation.
 
-Start request (versions must already be active manifests in the matter):
+Before starting, fetch `GET /matters/{matter_id}/investigations/eligible-versions`.
+It returns only the current `document_id`/`version_id` pairs, ordered by document
+ID, for live matter-owned documents whose ingestion status is `READY` and whose
+registered manifest is active and non-retired:
+
+```json
+[{"document_id":"document-id","version_id":"version-id"}]
+```
+
+There is **no persisted document approval status**. Eligibility means that a
+source can be selected by the operator, not that its contents are human-reviewed
+or true. The existing M7 name `ApprovedVersion` and POST field `approved_versions`
+represent the operator's explicitly selected source scope; they do not add an
+approval model. READY sources with partial extraction coverage can be selected;
+coverage acknowledgement remains required at review gates. OCR-required sources,
+deleted documents, inactive/retired versions, and legacy documents without
+registered active manifests are excluded. Listing does not repair/register
+manifests, inspect private source bytes, run a model, or create a workflow.
+
+An empty matter returns `[]`; a missing matter returns 404
+`INVESTIGATION_NOT_FOUND`. This endpoint uses the existing operator authentication
+and workspace binding and does not require an LLM model to be configured. Its
+response is a point-in-time selection aid. M7 still validates the exact submitted
+pairs and input currency when starting; versions retired or replaced after a
+list read produce a conflict. Refresh eligibility and explicitly select again;
+never automatically retry starting a new run.
+
+Start request (copy the selected pairs from that response):
 
 ```json
 {"approved_versions":[{"document_id":"document-id","version_id":"version-id"}]}
@@ -106,3 +134,24 @@ Reading the run after server restart reconciles pending approval intents without
 resubmitting them. Retrying the original decision is also safe. M7's immutable
 publication transaction prevents duplicate snapshots. Unknown external tool
 outcomes fail closed under the existing M7 recovery contract.
+
+## Frontend workspace (M8B)
+
+Open **Investigations** from a matter, then follow a run link to its dedicated
+review page. Refresh reads the durable server state; approval confirmation and
+incomplete-coverage acknowledgement are required anew at each gate. Published
+views fetch the snapshot and signed artifact endpoints rather than reusing draft
+review contents.
+
+An unresolved submitted decision is kept in this browser tab's session storage,
+including its original ordered commands, IDs, UTC timestamps, and approval token.
+Retry sends that exact payload. A conflict refreshes the server view without
+submitting another decision. Explicitly discarding a saved request does not undo
+server work. Closing the tab loses this local retry envelope, but existing runs
+remain available through the matter investigation list.
+
+The start page reads `/eligible-versions` alongside the investigation list and
+offers only those exact server-provided pairs. Empty or unavailable eligibility
+keeps starting disabled. A start conflict clears the old selection and refreshes
+the eligible list without resubmitting. The frontend never derives version IDs
+from document content, readiness alone, or old snapshots.
