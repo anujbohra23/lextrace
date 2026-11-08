@@ -22,7 +22,7 @@ export function investigationError(error: unknown): string {
       case 503: return "The investigation service is unavailable. Refresh to reconcile server progress, or retry the identical submitted request.";
     }
   }
-  return "The request could not be confirmed. An investigation may already have started. Check Existing investigations before creating another run. A submitted review can be retried unchanged.";
+  return "The request could not be confirmed. An investigation may already have started. Check Existing investigations before creating another run. A submitted request can be retried unchanged.";
 }
 
 export function InvestigationWorkspace({ matterId, threadId }: {
@@ -39,7 +39,7 @@ export function InvestigationWorkspace({ matterId, threadId }: {
   const [busy, setBusy] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const sending = useRef(false);
-  const storageKey = threadId ? decisionStorageKey(matterId, threadId) : null;
+  const storageKey = threadId ? decisionStorageKey(matterId, threadId) : `lextrace.investigationStart:${encodeURIComponent(matterId)}`;
 
   const refresh = useCallback(async () => {
     if (threadId) setRun(await api<InvestigationView>(`${base}/${encodeURIComponent(threadId)}`));
@@ -85,27 +85,35 @@ export function InvestigationWorkspace({ matterId, threadId }: {
     finally { setBusy(false); }
   }
   async function start() {
-    if (sending.current || !selected.length) return;
+    if (sending.current || pending || !selected.length) return;
     // Use only server-listed active manifests; M7 revalidates them at start.
     const versions = eligibleVersions.filter((v) => selected.includes(JSON.stringify(v)));
     if (!versions.length || versions.length > 100 || new Set(versions.map((v) => v.document_id)).size !== versions.length) {
       setError("Select at most 100 current versions, with one version per document."); return;
     }
+    const body = JSON.stringify({ request_id: crypto.randomUUID(), approved_versions: versions });
+    try { window.sessionStorage.setItem(storageKey, body); setPending(body); }
+    catch { setError("Browser retry storage is unavailable. Starting is blocked until the request can be saved safely."); return; }
+    await transmitStart(body);
+  }
+  async function transmitStart(body: string) {
+    if (sending.current) return;
     sending.current = true; setBusy(true); setError("");
     try {
-      const next = await api<InvestigationView>(base, { method: "POST", body: JSON.stringify({ approved_versions: versions }) });
+      const next = await api<InvestigationView>(base, { method: "POST", body });
+      window.sessionStorage.removeItem(storageKey); setPending(null);
       router.push(`${base}/${encodeURIComponent(next.thread_id)}`);
     } catch (failure) {
       setError(failure instanceof ApiError && failure.status === 409
-        ? "Selected document versions may be stale or invalid. Select sources again after refresh; no start is retried automatically."
+        ? "The start is busy, conflicting, or its sources are no longer current. Refresh server status; retry only the saved identical request."
         : failure instanceof ApiError && failure.status === 422
-          ? "The selected source request was rejected as invalid. Refresh eligible versions and select sources again."
+          ? "The saved source request is invalid. Review server status before discarding it."
           : investigationError(failure));
-      setSelected([]); setEligibleVersions([]);
       await refresh().catch(() => undefined);
     }
     finally { sending.current = false; setBusy(false); }
   }
+
   async function transmit(body: string) {
     if (!threadId || sending.current) return;
     sending.current = true; setBusy(true); setError("");
@@ -149,11 +157,12 @@ export function InvestigationWorkspace({ matterId, threadId }: {
     <div className="review-actions"><button disabled={busy} onClick={() => void reload()}>Refresh server status</button>{threadId && <><Link href={base}>All investigations →</Link><Link href={`${base}/${encodeURIComponent(threadId)}/deposition`}>Deposition preparation →</Link></>}</div>
     {threadId && <DocxDownload path={`${base}/${encodeURIComponent(threadId)}/export.docx`} label="Download investigation report" filename="lextrace-investigation-report.docx" disabled={busy || run?.stage !== "APPROVED" || !run.snapshot_id} reason="A current signed investigation snapshot is required for Word export." />}
     {!threadId && <><h2>Existing investigations</h2><div className="matter-cards">{runs.map((item) => <Link key={item.thread_id} href={`${base}/${encodeURIComponent(item.thread_id)}`}><strong>Run {item.run_id}</strong><span>{item.stage} · {item.checkpoint ? `${item.checkpoint} review` : "No active review"}</span></Link>)}</div>{loaded && runs.length === 0 && <p>No investigations are available.</p>}
-      <section className="workspace"><h2>Start investigation</h2><p>Select eligible active document versions. READY sources are selectable; this does not imply human approval of their contents. Starting creates a new run; refresh the list before repeating an uncertain start.</p>
+      <section className="workspace"><h2>Start investigation</h2><p>Select eligible active document versions. READY sources are selectable; this does not imply human approval of their contents. Each new start has a durable request identity. An uncertain start can be retried unchanged after refresh.</p>
         {loaded && eligibleVersions.length === 0 && <p className="notice">No eligible document versions are available. Upload a readable document with READY status and a registered active version, then refresh.</p>}
-        {eligibleVersions.map((version) => { const key = JSON.stringify(version); return <label className="investigation-check" key={key}><input type="checkbox" disabled={busy} checked={selected.includes(key)} onChange={(e) => setSelected(e.target.checked ? [...selected, key] : selected.filter((v) => v !== key))} />Document {version.document_id} · version {version.version_id}</label>; })}
-        <button disabled={busy || !loaded || selected.length === 0} onClick={() => void start()}>Start investigation</button>
+        {eligibleVersions.map((version) => { const key = JSON.stringify(version); return <label className="investigation-check" key={key}><input type="checkbox" disabled={busy || !!pending} checked={selected.includes(key)} onChange={(e) => setSelected(e.target.checked ? [...selected, key] : selected.filter((v) => v !== key))} />Document {version.document_id} · version {version.version_id}</label>; })}
+        <button disabled={busy || !!pending || !loaded || selected.length === 0} onClick={() => void start()}>Start investigation</button>
       </section></>}
+    {!threadId && pending && <section className="notice" aria-label="Saved start request"><h2>Start awaiting acknowledgement</h2><p>The exact source selection and request identity are saved in this tab. Retry the same request to recover its existing investigation. Discarding it does not undo server work.</p><div className="review-actions"><button disabled={busy} onClick={() => void transmitStart(pending)}>Retry identical start request</button><button disabled={busy} onClick={discard}>Discard saved request</button></div></section>}
     {threadId && pending && <section className="notice" aria-label="Saved review request"><h2>Submitted review awaiting acknowledgement</h2><p>The exact submitted request is saved in this tab for retry. Server progress is authoritative; review controls stay locked until this request is acknowledged or explicitly discarded.</p><div className="review-actions"><button disabled={busy} onClick={() => void transmit(pending)}>Retry identical review request</button><button disabled={busy} onClick={discard}>Discard saved request</button></div></section>}
     {threadId && run && <><h2>Run {run.run_id}</h2><p role="status">{run.stage} · {run.checkpoint ? `${run.checkpoint} review checkpoint` : "No active review checkpoint"}</p><p>Coverage: {run.coverage.join(", ") || "Not reported"}</p>{run.errors.length > 0 && <p className="notice">Run diagnostics: {run.errors.join(", ")}</p>}
       {run.stage === "WAITING_REVIEW" && run.checkpoint && run.token && run.digest && run.review && <InvestigationReview key={`${run.run_id}:${run.token}:${pending ? "locked" : "open"}`} run={run} disabled={busy || !!pending} onDecision={submit} />}

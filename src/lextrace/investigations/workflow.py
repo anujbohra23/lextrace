@@ -3,6 +3,8 @@
 Use open() for durable execution; injected MemorySaver remains session-only.
 """
 
+import json
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from hashlib import sha256
@@ -266,6 +268,7 @@ class InvestigationServices:
                 self.extractor,
                 run_id=state.run_id,
                 max_windows=allowance,
+                verbatim_anchors=True,
             )
             result = verify_extraction(
                 extracted, version, sections, text, run_id=state.run_id
@@ -498,23 +501,27 @@ class InvestigationWorkflow:
         if self.runtime is None:
             return self.inspect(thread_id)
         with self._lock:
-            state = self.inspect(thread_id)
-            if state.cancelled:
-                return state
-            self._reload(state)
-            rows = self.runtime.read(
-                "SELECT payload FROM investigation_intents WHERE thread_id=? "
-                "AND status!='DONE' ORDER BY rowid LIMIT 1",
-                (thread_id,),
-            )
-            row = rows[0] if rows else None
-            if row:
-                return self._resume_durable(self.runtime.parse_approval(row[0]))
-            if self._graph.get_state(
-                self._config(thread_id)
-            ).next and not self.pending_gate(thread_id):
-                self._graph.invoke(None, self._config(thread_id))
-            return self.inspect(thread_id)
+            return self._reopen_locked(thread_id)
+
+    def _reopen_locked(self, thread_id: str) -> InvestigationState:
+        assert self.runtime is not None
+        state = self.inspect(thread_id)
+        if state.cancelled:
+            return state
+        self._reload(state)
+        rows = self.runtime.read(
+            "SELECT payload FROM investigation_intents WHERE thread_id=? "
+            "AND status!='DONE' ORDER BY rowid LIMIT 1",
+            (thread_id,),
+        )
+        row = rows[0] if rows else None
+        if row:
+            return self._resume_durable(self.runtime.parse_approval(row[0]))
+        if self._graph.get_state(
+            self._config(thread_id)
+        ).next and not self.pending_gate(thread_id):
+            self._graph.invoke(None, self._config(thread_id))
+        return self.inspect(thread_id)
 
     def _resume_durable(self, approval: HumanApproval) -> InvestigationState:
         runtime = self.runtime
@@ -598,6 +605,8 @@ class InvestigationWorkflow:
         approved_versions: tuple[ApprovedVersion, ...],
         *,
         budgets: WorkflowBudgets | None = None,
+        request_id: str | None = None,
+        operator_id: str | None = None,
     ) -> InvestigationState:
         with self._lock:
             b = WorkflowBudgets.model_validate(
@@ -621,6 +630,52 @@ class InvestigationWorkflow:
                         version.model_dump(include=set(SourceIdentity.model_fields))
                     )
                 )
+            start_request = None
+            if request_id is not None:
+                if (
+                    self.runtime is None
+                    or not operator_id
+                    or re.fullmatch(r"[A-Za-z0-9_.:-]{1,256}", request_id) is None
+                ):
+                    raise ValueError("Invalid durable start request.")
+                digest = sha256(
+                    json.dumps(
+                        {
+                            "matter_id": matter_id,
+                            "approved_versions": [
+                                v.model_dump(mode="json") for v in approved_versions
+                            ],
+                            "budgets": b.model_dump(mode="json"),
+                        },
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ).encode()
+                ).hexdigest()
+                initial = self.runtime.start_request(
+                    matter_id, request_id, operator_id, digest
+                )
+                if initial is not None:
+                    if initial.sources != tuple(sources) or initial.budgets != b:
+                        raise ValueError("Start request input conflicts.")
+                    config = self._config(initial.thread_id)
+                    if self._graph.get_state(config).values:
+                        return self._reopen_locked(initial.thread_id)
+                    if self.runtime.read(
+                        "SELECT 1 FROM investigation_artifacts WHERE thread_id=? "
+                        "AND node!='initial' LIMIT 1",
+                        (initial.thread_id,),
+                    ):
+                        raise ValueError("Executed run checkpoint is unavailable.")
+                    # The request/run/initial artifact committed before any graph
+                    # checkpoint or provider call. Resume that exact initial run.
+                    with self.runtime.transaction():
+                        self.runtime.currency(initial, accepted=False)
+                    self.artifacts[initial.thread_id] = self.runtime.load(
+                        initial.thread_id, "initial"
+                    )[0]
+                    self._graph.invoke(initial, config)
+                    return self.inspect(initial.thread_id)
+                start_request = (request_id, operator_id, digest)
             thread = uuid4().hex
             state = InvestigationState(
                 matter_id=matter_id,
@@ -631,7 +686,9 @@ class InvestigationWorkflow:
             )
             self.artifacts[thread] = InvestigationArtifacts()
             if self.runtime is not None:
-                self.runtime.create(state, self.artifacts[thread])
+                self.runtime.create(
+                    state, self.artifacts[thread], start_request=start_request
+                )
             self._graph.invoke(state, self._config(thread))
             return self.inspect(thread)
 

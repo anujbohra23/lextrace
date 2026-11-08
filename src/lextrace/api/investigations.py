@@ -73,6 +73,7 @@ class RequestModel(BaseModel):
 
 
 class StartInvestigation(RequestModel):
+    request_id: Annotated[str, Field(pattern=r"^[A-Za-z0-9_.:-]{1,256}$")] | None = None
     approved_versions: Annotated[
         list[ApprovedVersion], Field(min_length=1, max_length=100)
     ]
@@ -203,14 +204,24 @@ def investigation_router(
             raise HTTPException(503, "INVESTIGATION_UNAVAILABLE") from None
 
     @router.post("", status_code=201)
-    def start(matter_id: str, body: StartInvestigation) -> InvestigationView:
+    def start(
+        matter_id: str,
+        body: StartInvestigation,
+        principal: Annotated[OperatorPrincipal, Depends(require_operator)],
+    ) -> InvestigationView:
         matter(matter_id)
 
         def execute() -> InvestigationView:
             w = workflow()
             return view(
                 w,
-                w.start(matter_id, tuple(body.approved_versions), budgets=body.budgets),
+                w.start(
+                    matter_id,
+                    tuple(body.approved_versions),
+                    budgets=body.budgets,
+                    request_id=body.request_id,
+                    operator_id=principal.operator_id,
+                ),
             )
 
         return safe(execute)

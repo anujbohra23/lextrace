@@ -5,6 +5,8 @@ supply matter-scoped trusted manifests/sections and the expected extraction run.
 No review decision or calendar interpretation is inferred here.
 """
 
+import logging
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from hashlib import sha256
@@ -261,6 +263,21 @@ def verify_extraction(
                 needs_review,
             )
         )
+    logging.getLogger(__name__).info(
+        "factual_verification_summary",
+        extra={
+            "verification_counts": {
+                "accepted_by_kind": dict(Counter(type(c).__name__ for c in valid)),
+                "rejected_by_reason": dict(
+                    Counter(code for q in quarantine for code in q.issue_codes)
+                ),
+                "extraction_quarantined": len(result.quarantined),
+                "verified_events": sum(
+                    isinstance(c, InvestigationEvent) for c in valid
+                ),
+            }
+        },
+    )
     return ExtractionVerificationResult(
         tuple(valid),
         tuple(quarantine),

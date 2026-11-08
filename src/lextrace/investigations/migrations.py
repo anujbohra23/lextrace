@@ -178,6 +178,28 @@ def migrate(connection: sqlite3.Connection) -> None:
             ):
                 connection.execute(statement)
             connection.execute("INSERT INTO investigation_schema_versions VALUES (5)")
+        if (
+            connection.execute(
+                "SELECT 1 FROM investigation_schema_versions WHERE version=6"
+            ).fetchone()
+            is None
+        ):
+            connection.execute(
+                "CREATE TABLE investigation_start_requests ("
+                "matter_id TEXT NOT NULL REFERENCES matters(id) ON DELETE CASCADE, "
+                "request_id TEXT NOT NULL, operator_id TEXT NOT NULL, "
+                "request_digest TEXT NOT NULL, thread_id TEXT UNIQUE REFERENCES "
+                "investigation_runs(thread_id) ON DELETE SET NULL, initial_state TEXT, "
+                "PRIMARY KEY(matter_id,request_id))"
+            )
+            # A deleted source/run must not free an old key for a different run.
+            # Keep only the opaque request tombstone, never orphan source state.
+            connection.execute(
+                "CREATE TRIGGER investigation_start_deleted BEFORE DELETE ON "
+                "investigation_runs BEGIN UPDATE investigation_start_requests "
+                "SET initial_state=NULL WHERE thread_id=OLD.thread_id; END"
+            )
+            connection.execute("INSERT INTO investigation_schema_versions VALUES (6)")
         connection.commit()
     except Exception:
         connection.rollback()

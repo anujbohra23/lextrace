@@ -169,3 +169,43 @@ approved-plan routes, evidence constraints, partial/blocked outcomes and recover
 See [DOCX_EXPORTS.md](DOCX_EXPORTS.md) for investigation and approved deposition
 export routes, trust checks, revision selection, resource limits and UI behavior.
 Exports preserve M7/M9 approval boundaries and do not resume workflows.
+
+## Durable start request identity (M11 remediation)
+
+`POST /matters/{matter_id}/investigations` accepts an optional `request_id`:
+
+```json
+{
+  "request_id": "8debe286-4162-4890-a30c-785439dd88dc",
+  "approved_versions": [{"document_id":"<eligible document>","version_id":"<eligible version>"}]
+}
+```
+
+Save this ID **and the exact submitted payload** before sending. Repeating the
+same matter/operator/ID and normalized source-order/budget payload returns the
+same investigation's authoritative current view (201), which may have advanced
+since the original response. It does not extract or publish a second time. A
+new ID intentionally starts a distinct run, even with identical sources. Omitting
+the ID retains the original non-idempotent start behavior for compatibility.
+
+IDs contain 1–256 ASCII letters/digits or `_.:-`. Invalid IDs return the existing
+422 `INVESTIGATION_INVALID_REQUEST` envelope. Reusing an ID with different source
+order, versions, budgets or operator conflicts (409). Authentication/workspace
+binding and matter/source currency checks still apply on **every retry**; a key
+never authorizes another matter, document or thread. The same ID can be used for
+independent starts in different matters without returning either matter's data.
+
+Additive migration 6 stores the scoped request, input digest and initial run seed
+atomically with the M7 run and initial journal. Existing M7 coordination and
+checkpoint recovery handle retries and restarts. A concurrent request on another
+workflow instance can return 409 while the runtime is busy; retry the same saved
+ID/payload after refreshing, never generate a replacement ID automatically.
+Deletion keeps an unavailable-key tombstone until matter deletion, clears its
+initial source state, and prevents resurrection of a deleted run under that key.
+No approval is implied by starting/retrying an investigation.
+
+The UI saves a generated ID and payload in per-tab session storage before POST,
+locks new starts while acknowledgement is unresolved, and offers an explicit
+identical retry after refresh/remount. It clears the envelope only after server
+acknowledgement or explicit discard. Discarding does not undo server work; closing
+the tab can lose this retry envelope, while the investigation remains listed.

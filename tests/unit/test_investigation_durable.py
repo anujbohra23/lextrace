@@ -683,3 +683,48 @@ def test_process_exit_releases_runtime_claim(durable: Harness) -> None:
             process.communicate("x", timeout=5)
         assert process.returncode == 9
     assert durable.workflow.resume(approval(first)).review_gate == "findings"
+
+
+def test_legacy_wire_types_recover_with_explicit_serializer_allowlist(
+    durable: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
+
+    assert durable.workflow.runtime is not None
+    durable.workflow.runtime.saver.serde = JsonPlusSerializer(
+        allowed_msgpack_modules=True
+    )
+    first = durable.start()
+    request = linked(durable.workflow, first)
+    caplog.clear()
+    workflow = durable.restart()
+    assert workflow.reopen(first.thread_id) == first
+    second = workflow.resume(request)
+    workflow = durable.restart()
+    assert workflow.reopen(first.thread_id) == second
+    assert workflow.resume(approval(second)).stage == "APPROVED"
+    assert "Deserializing unregistered" not in caplog.text
+
+
+def test_checkpoint_serializer_does_not_reconstruct_unregistered_types(
+    durable: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    assert durable.workflow.runtime is not None
+    serializer = durable.workflow.runtime.saver.serde
+    # Harness is deliberately not a checkpoint wire type. Do not deserialize it
+    # or import its constructor from an arbitrary checkpoint extension.
+    from datetime import UTC, datetime
+
+    from lextrace.matter.contracts import Matter
+
+    payload = serializer.dumps_typed(
+        Matter(
+            matter_id="synthetic",
+            name="synthetic",
+            created_at=datetime.now(UTC),
+            updated_at=datetime.now(UTC),
+        )
+    )
+    restored = serializer.loads_typed(payload)
+    assert not isinstance(restored, Matter)
+    assert "Blocked deserialization" in caplog.text

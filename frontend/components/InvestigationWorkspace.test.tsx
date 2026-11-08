@@ -44,7 +44,7 @@ it("fetches eligible versions, starts with the selected exact pair and authentic
   fireEvent.click(screen.getByRole("checkbox", { name: "Document document · version active-version" }));
   fireEvent.click(screen.getByRole("button", { name: "Start investigation" }));
   await waitFor(() => expect(push).toHaveBeenCalledWith(runPath));
-  expect(JSON.parse(posts(fetchMock)[0][1].body)).toEqual({ approved_versions: [{ document_id: "document", version_id: "active-version" }] });
+  expect(JSON.parse(posts(fetchMock)[0][1].body)).toEqual({ request_id: expect.any(String), approved_versions: [{ document_id: "document", version_id: "active-version" }] });
   for (const [url, init] of fetchMock.mock.calls) {
     expect(url).not.toContain("tab-credential");
     expect(new Headers(init?.headers).get("authorization")).toBe("Bearer tab-credential");
@@ -222,7 +222,7 @@ it.each([409, 422])("refreshes eligible versions after a rejected start (%i) wit
   render(<InvestigationWorkspace matterId="matter" />);
   fireEvent.click(await screen.findByRole("checkbox", { name: /version active-version/ }));
   fireEvent.click(screen.getByRole("button", { name: "Start investigation" }));
-  expect(await screen.findByRole("alert")).toHaveTextContent(status === 409 ? "stale or invalid" : "rejected as invalid");
+  expect(await screen.findByRole("alert")).toHaveTextContent(status === 409 ? "busy, conflicting" : "request is invalid");
   const replacement = await screen.findByRole("checkbox", { name: /version replacement-version/ });
   expect(replacement).not.toBeChecked();
   expect(screen.queryByRole("checkbox", { name: /version active-version/ })).not.toBeInTheDocument();
@@ -237,4 +237,27 @@ it("does not offer sources for a missing matter", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("unavailable in this matter");
   expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Start investigation" })).toBeDisabled();
+});
+
+it("recovers a lost start acknowledgement with the saved identity after remount", async () => {
+  let attempts = 0;
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST") {
+      if (++attempts === 1) throw new TypeError("lost acknowledgement");
+      return json(evidence);
+    }
+    return json(url.endsWith("/eligible-versions") ? [{ document_id: "document", version_id: "active-version" }] : []);
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  const first = render(<InvestigationWorkspace matterId="matter" />);
+  fireEvent.click(await screen.findByRole("checkbox"));
+  fireEvent.click(screen.getByRole("button", { name: "Start investigation" }));
+  await screen.findByRole("button", { name: "Retry identical start request" });
+  const submitted = posts(fetchMock)[0][1].body;
+  expect(JSON.parse(submitted).request_id).toBeTruthy();
+  first.unmount();
+  render(<InvestigationWorkspace matterId="matter" />);
+  fireEvent.click(await screen.findByRole("button", { name: "Retry identical start request" }));
+  await waitFor(() => expect(push).toHaveBeenCalledWith(runPath));
+  expect(posts(fetchMock)[1][1].body).toBe(submitted);
 });

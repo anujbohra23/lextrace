@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import HttpUrl, ValidationError
+from pydantic import HttpUrl, SecretStr, ValidationError
 
 from lextrace.api.app import create_app
 from lextrace.config import AppSettings
@@ -387,9 +387,20 @@ def test_precedent_api_doctrine_and_review(
     with TestClient(
         create_app(
             retriever=engine,
-            settings=AppSettings(matter_db=database, private_matter_root=private),
+            settings=AppSettings(
+                matter_db=database,
+                private_matter_root=private,
+                operator_id="TEST-ONLY-precedent",
+                operator_api_secret=SecretStr(
+                    "test-only-credential-00000000000000000000000000"
+                ),
+                adopt_legacy_matters=True,
+            ),
         )
     ) as client:
+        client.headers["Authorization"] = (
+            "Bearer test-only-credential-00000000000000000000000000"
+        )
         assert client.get("/cases/2/precedent-trace").status_code == 200
         trace = client.get(f"{base}/precedent-trace")
         assert trace.status_code == 200

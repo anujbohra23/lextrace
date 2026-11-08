@@ -351,19 +351,15 @@ class FakeExtractor:
                 else [
                     {
                         "kind": "event",
-                        "start": 0,
-                        "end": len(text),
                         "quote": text,
-                        "entity_type": None,
-                        "temporal_kind": None,
                     },
                     {
                         "kind": "assertion",
-                        "start": 0,
-                        "end": len(text),
+                        "speaker_quote": None,
+                        "predicate_quote": None,
+                        "subject_quote": None,
+                        "object_quote": None,
                         "quote": text,
-                        "entity_type": None,
-                        "temporal_kind": None,
                     },
                 ]
             }

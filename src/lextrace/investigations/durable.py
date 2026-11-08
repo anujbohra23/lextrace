@@ -16,6 +16,7 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING, Any
 
+from langgraph.checkpoint.serde.jsonplus import JsonPlusSerializer
 from langgraph.checkpoint.sqlite import SqliteSaver
 from pydantic import TypeAdapter
 
@@ -94,7 +95,32 @@ class DurableRuntime:
         except BaseException:
             self.connection.close()
             raise
-        self.saver = SqliteSaver(self.connection)
+        # Explicit exact types, not a module wildcard or pickle fallback. These
+        # are the existing wire types; old checkpoint bytes remain readable.
+        from lextrace.investigations.contracts import SourceIdentity
+        from lextrace.investigations.findings import (
+            InvestigationBudgets,
+            InvestigationDiagnostic,
+        )
+        from lextrace.investigations.inconsistency_candidates import CandidateBudgets
+        from lextrace.investigations.review import RecordDependency, ReviewTarget
+        from lextrace.investigations.workflow import WorkflowBudgets
+
+        allowed = [
+            WorkflowBudgets,
+            SourceIdentity,
+            RecordDependency,
+            ReviewTarget,
+            CandidateBudgets,
+            InvestigationBudgets,
+            InvestigationDiagnostic,
+        ]
+        self.saver = SqliteSaver(
+            self.connection,
+            serde=JsonPlusSerializer(
+                allowed_msgpack_modules=allowed,
+            ),
+        )
 
     @staticmethod
     def _secure_file(path: Path) -> None:
@@ -147,7 +173,11 @@ class DurableRuntime:
                 raise
 
     def create(
-        self, state: "InvestigationState", artifacts: "InvestigationArtifacts"
+        self,
+        state: "InvestigationState",
+        artifacts: "InvestigationArtifacts",
+        *,
+        start_request: tuple[str, str, str] | None = None,
     ) -> None:
         with self.transaction() as db:
             db.execute(
@@ -161,6 +191,61 @@ class DurableRuntime:
                     (state.thread_id, source.document_id),
                 )
             self._write(db, state.thread_id, "initial", artifacts, {})
+            if start_request is not None:
+                request_id, operator_id, digest = start_request
+                db.execute(
+                    "INSERT INTO investigation_start_requests VALUES (?,?,?,?,?,?)",
+                    (
+                        state.matter_id,
+                        request_id,
+                        operator_id,
+                        digest,
+                        state.thread_id,
+                        state.model_dump_json(),
+                    ),
+                )
+            self.crash("before_start_commit")
+        self.crash("after_start_commit")
+
+    def start_request(
+        self, matter_id: str, request_id: str, operator_id: str, digest: str
+    ) -> "InvestigationState | None":
+        """Read a scoped durable request; possession never establishes ownership."""
+        from lextrace.investigations.workflow import InvestigationState
+
+        rows = self.read(
+            "SELECT s.operator_id,s.request_digest,s.thread_id,s.initial_state,"
+            "r.matter_id,r.run_id FROM investigation_start_requests s LEFT JOIN "
+            "investigation_runs r ON r.thread_id=s.thread_id "
+            "WHERE s.matter_id=? AND s.request_id=?",
+            (matter_id, request_id),
+        )
+        if not rows:
+            return None
+        operator, expected, thread, payload, owner, run = rows[0]
+        if (
+            operator != operator_id
+            or expected != digest
+            or owner != matter_id
+            or not payload
+        ):
+            raise ValueError("Start request conflicts or is no longer available.")
+        initial = InvestigationState.model_validate_json(payload)
+        if (initial.matter_id, initial.thread_id, initial.run_id) != (
+            owner,
+            thread,
+            run,
+        ):
+            raise ValueError("Start request owner conflicts.")
+        if initial != InvestigationState(
+            matter_id=owner,
+            thread_id=thread,
+            run_id=run,
+            sources=initial.sources,
+            budgets=initial.budgets,
+        ):
+            raise ValueError("Start request seed conflicts.")
+        return initial
 
     def read(self, query: str, args: tuple[object, ...] = ()) -> list[Any]:
         with self.repo._lock:
